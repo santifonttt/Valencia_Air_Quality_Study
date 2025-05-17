@@ -1,0 +1,4 @@
+[core]
+    remote = myremote
+['remote "myremote"']
+    url = /home/nandirin/fmargom1_local/data_proyecto_ii
