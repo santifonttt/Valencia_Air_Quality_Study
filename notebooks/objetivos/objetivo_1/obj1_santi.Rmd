@@ -16,492 +16,1002 @@ library(naniar)
 library(lubridate)
 library(zoo)
 library(stringr)
+library(emmeans)
 ```
 
+
+Aqui vamos a estudiar los contaminantes individualmente.
+
+Primero de todo, vamos a cargar la base de datos.
 
 ```{r}
-df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/data/raw/calidad_aire/Base_Datos_filtradas_desde_2019/conjunto_estaciones.csv", stringsAsFactors = FALSE)
+df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/base_para_obj1.csv", stringsAsFactors = FALSE)
 ```
 
-### En este estudio vamos a analizar los contaminantes de la base de datos por zonas y años
-
-
-Primero de todo, vamos a ver que variables tenemos en la base de datos.
-
-```{r}
-colnames(df)
-```
-
-Podemos observar, tenemos muchas variables con nombres indefinidos por lo que no poedmos saber que son, antes de borrarlas vamos a ver el porcentaje de nulos de cada variable.
-
-```{r}
-miss_var_summary(df)
-```
-
-Aqui podemos ver que muchas variables tienen 100% de faltantes, por lo que no podremos hacer nada en el estudio con esas variables. Debido a eso, vamos a borrar las columnas que tienen 100% de faltantes.
-
-```{r}
-df1 <- df[, colSums(is.na(df)) < nrow(df)]
-
-colnames(df1)
-```
-
-Una vez borradas todas las variables inútiles, vamos a seguir estudiandolas. Lo primero que vamos a hacer es verificar el tipo de datos de cada variable, para corregir en caso necesario.
-
-```{r}
-str(df1)
-```
-
-Podemos observar que la mayoría de las variables tienen el tipo de dato correcto, pero hay algunas que no. Por ejemplo, las variables `C8H10`, `C7H8` y `C6H6` deberían ser numéricas, pero están como caracteres. Por lo que vamos a convertirlas a numéricas. Además, la variables `Temp.`, `Veloc.`, `H.Rel.`, `Precip.` y `Veloc.máx.` también deberían ser numéricas, pero están como caracteres. Por lo que vamos a convertirlas a numéricas.
-
-```{r}
-df1$C8H10 <- as.numeric(gsub(",", ".", df1$C8H10))
-
-df1$C7H8 <- as.numeric(gsub(",", ".", df1$C7H8))
-
-df1$C6H6 <- as.numeric(gsub(",", ".", df1$C6H6))
-
-df1$Temp. <- as.numeric(gsub(",", ".", df1$Temp.))
-
-df1$Veloc. <- as.numeric(gsub(",", ".", df1$Veloc.))
-
-df1$H.Rel. <- as.numeric(gsub(".", ".", df1$H.Rel.))
-
-df1$Precip. <- as.numeric(gsub(",", ".", df1$Precip.))
-
-df1$Veloc.máx. <- as.numeric(gsub(",", ".", df1$Veloc.máx.))
-
-df1 <- df1 %>%
-  mutate(
-    # 1) vacíos → NA
-    CO = na_if(CO, ""),
-    # 2) coma decimal → punto
-    CO = str_replace(CO, ",", "."),
-    # 3) carácter → numérico
-    CO = as.numeric(CO)
-  )
-
-str(df1)
-```
-
-Ahora que ya hemos cambiado los tipos de datos de las variables que creeiamos necesario, vamos a ver el porcentaje de valores faltantes de cada variable.
-
-```{r}
-miss_var_summary(df1)
-```
-
-Podemos observar que la variable `H.Rel.` tiene un 100% de faltantes lo cual nos indica que no sirve para nada, asique la borramos.
-
-```{r}
-df1 <- df1 %>% 
-  select(-c('H.Rel.'))
-```
-
-Pese a que de las variables restantes, muchas tienen porcentajes de faltantes bastante elevados, no las vamos a eliminar ya que nos podrían servir en el estudio.
-
-Además, hay variables con nombres que queremos cambiar y también vamos a crear variables nuevas para facilitar su uso en el futuro. Por ejemplo, de la variable `FECHA`vamos a crear las siguientes variables:
-- `Dia`: el día de la fecha.
-- `Mes`: el mes de la fecha.
-- `Año`: el año de la fecha.
-- `Dia_semana`: el día de la semana de la fecha.
-- `Mes_numero`: el mes de la fecha en formato numérico.
-
-De las variables `FECHA` y `HORA` vamos a crear la variable `FechaHora`.
-
-```{r}
-#cambiar nombre de variable FECHA
-colnames(df1)[colnames(df1) == "FECHA"] <- "Fecha"
-# Convertir FECHA a formato Date (asumiendo "dd/mm/yyyy")
-df1$Fecha <- as.Date(df1$Fecha, format = "%Y-%m-%d")
-
-# Extraer día, mes y año
-df1 <- df1 %>%
-  mutate(
-    Dia = ifelse(!is.na(Fecha), day(Fecha), NA),
-    Mes = ifelse(!is.na(Fecha), month(Fecha), NA),
-    Año = ifelse(!is.na(Fecha), year(Fecha), NA),
-    Dia_Semana = ifelse(!is.na(Fecha), weekdays(Fecha), NA)
-  )
-
-#modificamos DIA_SEMANA para que sea categorica y en español
-# Crear un mapeo de días de la semana de inglés a español
-dias_en_ingles <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-dias_en_espanol <- c("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
-mapa_dias <- setNames(dias_en_espanol, dias_en_ingles)
-df1$Dia_Semana <- mapa_dias[df1$Dia_Semana]
-
-#modificamos la variable mes
-# Crear un vector de mapeo de números a nombres de meses en español
-mapa_meses <- c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
-                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
-df1$Mes <- mapa_meses[as.numeric(df1$Mes)]
-
-#crear variable mes_numero
-df1 <- df1 %>%
-  mutate(MES_NUMERO = month(Fecha))
-
-#cambiar nombre del origen
-df1$archivo_origen <- substr(df1$archivo_origen, 10, nchar(df1$archivo_origen) - 4)
-
-#cambiar nombre de variable archivo_origen
-colnames(df1)[colnames(df1) == "archivo_origen"] <- "Origen"
-
-#cambiar nombre de variable HORA
-colnames(df1)[colnames(df1) == "HORA"] <- "Hora"
-
-#cambiar nombre de variable Veloc.
-colnames(df1)[colnames(df1) == "Veloc."] <- "Velocidad"
-
-#cambiar nombre de variable Direc.
-colnames(df1)[colnames(df1) == "Direc."] <- "Direccion_viento"
-
-#cambiar nombre de variable Temp.
-colnames(df1)[colnames(df1) == "Temp."] <- "Temperatura"
-
-#cambiar nombre de variable Pres.
-colnames(df1)[colnames(df1) == "Pres."] <- "Presion"
-
-#cambiar nombre de variable R.Sol.
-colnames(df1)[colnames(df1) == "R.Sol."] <- "Radiacion_solar"
-
-#cambiar nombre de variable Precip.
-colnames(df1)[colnames(df1) == "Precip."] <- "Precipitacion"
-
-#cambiar nombre de variable Veloc.máx.
-colnames(df1)[colnames(df1) == "Veloc.máx."] <- "Velocidad_maxima"
-
-# Creación de la variable FechaHora
-df1 <- df1 %>%
-  mutate(
-    FechaHora = as.POSIXct(paste(Fecha, sprintf("%02d:00:00", Hora)), format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
-  )
-
-# Filtramos para solo quedarnos con datos de 2019 hasta 2024
-df1<- df1 %>%
-  filter(Año != 2025)
-
-```
-
-```{r}
-colnames(df1)
-```
-
-Ahora que ya hemos hecho los cambios que queríamos, vamos a ver analizar las variables por zona. Primero vamos a mostrar todas las estación de medición.
-
-```{r}
-unique(df1$Origen)
-```
-
-Estás son las 20 estaciones disponibles en la base de datos. Ahora vamos a ver e cuantas estaciones se mide cada variable.
-
-Primero vamos a guardar en una variable todos las variables que se pueden medir. Y luego ejecutamos el codigo proporcionado.
-
-```{r}
-mediciones <- c(
-  "Velocidad", "Direccion_viento", "Temperatura", "Presion",
-  "Radiacion_solar", "Precipitacion", "Veloc.máx.",
-  "PM2.5", "PM1", "NO", "NO2", "PM10", "NOx",
-  "C8H10", "SO2", "CO", "O3", "C7H8", "C6H6",
-  "Ruido", "NH3"
-)
-
-df1 %>%
-  select(Origen, all_of(mediciones)) %>%       
-  pivot_longer(
-    cols      = all_of(mediciones),            
-    names_to  = "Variable", 
-    values_to = "Valor"
-  ) %>%
-  filter(!is.na(Valor)) %>%                   
-  distinct(Origen, Variable) %>%               
-  count(Variable, name = "Num_estaciones") %>% 
-  # --- 3) Gráfico ---
-  ggplot(aes(x = reorder(Variable, -Num_estaciones), 
-             y = Num_estaciones)) +
-    geom_col(fill = "skyblue", color = "black") +
-    labs(
-      title = "Número de estaciones con datos por variable",
-      x     = "Variable",
-      y     = "Número de estaciones"
-    ) +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-```
-
-En el hsitograma de arriba podemos observar que los contaminantes `NO`, `NO2` y `NOx` son los que se miden en más  esatciones (20 de 24 estaciones), lo que podría significar que son más importantes.
-
-Ahora vamos a ver que variables mide cada esatción, lo cual nos servirá más adelante para analizar variables individualmente.
-
-```{r}
-df_binaria <- df1 %>%
-  # Seleccionamos solo Origen y los contaminantes de interés
-  select(Origen, all_of(mediciones)) %>%
-  # Pasamos a formato largo para tratar cada par estación–contaminante
-  pivot_longer(cols       = -Origen,
-               names_to   = "Variable",
-               values_to  = "Valor") %>%
-  # Creamos un indicador 1/0 de si hay algún dato no NA
-  mutate(tiene_dato = ifelse(!is.na(Valor), 1, 0)) %>%
-  # Agrupamos para quedarnos con el máximo (si existe al menos un 1)
-  group_by(Origen, Variable) %>%
-  summarise(tiene_dato = max(tiene_dato), .groups = "drop") %>%
-  # Volvemos a formato ancho: cada contaminante en su columna
-  pivot_wider(names_from   = Variable,
-              values_from  = tiene_dato,
-              values_fill  = 0)
-
-# Mostramos la tabla final
-print(df_binaria)
-```
-
-En esta tabla, podemos observar 1 en las variables que se mide en la estación y 0 cuando no se mide. Para que quede un poco más visual vamos a crear una tabla que para cada estación, liste las variables que mide.
-
-```{r}
-resumen_estaciones <- df1 %>%
-  select(Origen, all_of(mediciones)) %>%
-  pivot_longer(
-    cols      = -Origen,
-    names_to  = "Variable",
-    values_to = "Valor"
-  ) %>%
-  filter(!is.na(Valor)) %>%
-  group_by(Origen) %>%
-  summarise(
-    num_var   = n_distinct(Variable),                   
-    lista_var = paste(sort(unique(Variable)), collapse = ", ") 
-  ) %>%
-  ungroup() %>%
-  arrange(desc(num_var)) 
-
-# Mostrar el resultado
-print(resumen_estaciones)
-```
-
-Podemos observar que las estaciones miden entre 5 y 20 varibles. Ahora vamos a hacer lo mismo pero por años, es decir en que años ha medido variables cada estación.
-
-```{r}
-resumen_anios_estaciones <- df1 %>%
-  # Nos quedamos solo con Origen y Año
-  select(Origen, Año) %>%
-  # Eliminamos filas sin Año
-  filter(!is.na(Año)) %>%
-  # Agrupamos por estación
-  group_by(Origen) %>%
-  # Calculamos número de años distintos y lista ordenada
-  summarise(
-    num_anios  = n_distinct(Año),
-    lista_anios = paste(sort(unique(Año)), collapse = ", ")
-  ) %>%
-  ungroup() %>%
-  # Orden descendente por número de años
-  arrange(desc(num_anios))
-
-# Mostrar resultado
-print(resumen_anios_estaciones)
-```
-
-Observamos que la mayoría de las estaciones tienen datos desde 2019 hasta 2024, pero hay otras que no.
-
-Lista de 2019-2024:
-- Paterna - CEAM		
-- Quart de Poblet			
-- Torrent-El Vedat			
-- València - Av. França			
-- València - Bulevard Sud			
-- València - Centre		
-- València - Molí del Sol			
-- València - Pista de Silla			
-- València - Politècnic	
-- València - Vivers
-- València-Conselleria Meteo
-
-Lista de 2020-2024:
-- València - Nazaret Met-2			
-- València Port Moll Trans. Ponent
-
-Lista de 2021-2024:
-- València Port llit antic Túria
-
-Lista de 2022-2024:
-- València Olivereta
-
-Lista de solo 2024:
-- Benetusser UM			
-- Catarroja UM			
-- Massanassa_UM				
-- Paiporta UM			
-- Sedavi UM
-
-Ahora vamos a ver la cantidad de variables que se han medido cada año en cada estación.
-
-```{r}
-library(dplyr)
-library(tidyr)
-
-
-resumen_estac_anio <- df1 %>%
-  # 1) Seleccionamos Origen, Año y las variables de medición
-  select(Origen, Año, all_of(mediciones)) %>%
-  # 2) Quitamos años faltantes
-  filter(!is.na(Año)) %>%
-  # 3) Llevamos todo a formato long
-  pivot_longer(
-    cols      = all_of(mediciones),
-    names_to  = "Variable",
-    values_to = "Valor"
-  ) %>%
-  # 4) Solo valores presentes
-  filter(!is.na(Valor)) %>%
-  # 5) Agrupamos por estación y año
-  group_by(Origen, Año) %>%
-  # 6) Para cada par Origen–Año contamos y listamos las variables medidas
-  summarise(
-    num_var    = n_distinct(Variable),
-    lista_var  = paste(sort(unique(Variable)), collapse = ", "),
-    .groups    = "drop"
-  ) %>%
-  # 7) Ordenamos (opc):
-  arrange(Origen, Año)
-
-# Ver el resultado
-print(resumen_estac_anio)
-
-```
-
-Al analizar esta tabla a mano, vemos que la mayoría de estaciones miden las mismas variables desde 2019 a 2024, pero hay excepciones, como las siguientes:
-
-Torrent-El Vedat:
-- Esta estación media 14 variables en 2019 y 2020, pero de 2021 a 2024 mide 17 variables. Lo cual nos indica que se añadieron sensores.
-
-València - Pista de Silla:
-- En esta estación, de 2019 a 2021 se medían 12 variables, a partir de 2022 se miden 11.
-
-València Port Moll Trans. Ponent:
-- En 2019 no medía ninguna variable, luego pasó a medir 8 en 2020 y a partir de 2021 mide 15 variables.
-
-Vamos a ver más a fondo las variables que se han empezado o dejado de medir en estas estaciones.
-
-#### Torrent-El Vedat
-
-```{r}
-presencia_torrent <- df1 %>%
-  filter(Origen == 'Torrent-El Vedat') %>%
-  select(Año, all_of(mediciones)) %>%
-  pivot_longer(
-    cols      = all_of(mediciones),
-    names_to  = "Variable",
-    values_to = "Valor"
-  ) %>%
-  filter(!is.na(Valor)) %>%
-  distinct(Año, Variable) %>%
-  mutate(presente = TRUE) %>%
-  pivot_wider(
-    names_from   = Año,
-    values_from  = presente,
-    values_fill  = list(presente = FALSE)
-  )
-
-# 3) Mostrar la matriz de presencia/ausencia
-print(presencia_torrent)
-
-# 4) Extraer variables que NO están en todos los años
-vars_incompletas_torrent <- presencia_torrent %>%
-  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
-  pull(Variable)
-
-cat("Variables medidas en algunos años pero no en todos:", 
-    paste(vars_incompletas_torrent, collapse = ", "), "\n")
-```
-
-Se puede observar que en 2019 no se media `CO`, `Presion` y `Radiacion_solar`. En cambio, en 2020, estas variables si se miden y las que no se miden son `C8H10`, `C7H8` y `C6H6`. En el resto de años, 2021-2024, se miden todas, midiendo un total de 17 variables en esos ultimos años.
-
-#### València - Pista de Silla
-
-```{r}
-presencia_silla <- df1 %>%
-  filter(Origen == 'València - Pista de Silla') %>%
-  select(Año, all_of(mediciones)) %>%
-  pivot_longer(
-    cols      = all_of(mediciones),
-    names_to  = "Variable",
-    values_to = "Valor"
-  ) %>%
-  filter(!is.na(Valor)) %>%
-  distinct(Año, Variable) %>%
-  mutate(presente = TRUE) %>%
-  pivot_wider(
-    names_from   = Año,
-    values_from  = presente,
-    values_fill  = list(presente = FALSE)
-  )
-
-# 3) Mostrar la matriz de presencia/ausencia
-print(presencia_silla)
-
-# 4) Extraer variables que NO están en todos los años
-vars_incompletas_silla <- presencia_silla %>%
-  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
-  pull(Variable)
-
-cat("Variables medidas en algunos años pero no en todos:", 
-    paste(vars_incompletas_silla, collapse = ", "), "\n")
-```
-
-En este caso, podemos observar que la variable `Ruido` se midió solo en los años 2019, 2020 y 2021.
-
-#### València Port Moll Trans. Ponent
-
-```{r}
-presencia_port <- df1 %>%
-  filter(Origen == 'València Port Moll Trans. Ponent') %>%
-  select(Año, all_of(mediciones)) %>%
-  pivot_longer(
-    cols      = all_of(mediciones),
-    names_to  = "Variable",
-    values_to = "Valor"
-  ) %>%
-  filter(!is.na(Valor)) %>%
-  distinct(Año, Variable) %>%
-  mutate(presente = TRUE) %>%
-  pivot_wider(
-    names_from   = Año,
-    values_from  = presente,
-    values_fill  = list(presente = FALSE)
-  )
-
-# 3) Mostrar la matriz de presencia/ausencia
-print(presencia_port)
-
-# 4) Extraer variables que NO están en todos los años
-vars_incompletas_port <- presencia_port %>%
-  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
-  pull(Variable)
-
-cat("Variables medidas en algunos años pero no en todos:", 
-    paste(vars_incompletas_port, collapse = ", "), "\n")
-```
-
-En este caso, en 2021 se empezó a medir `Velocidad`, `Direccion_viento`, `Temperatura`, `Presion`, `Radiacion_solar`, `Precipitacion` y `Velocidad_maxima`, por lo que en 2020 no se midieron.
-
-Ahora que ya sabemos l distribución de los datos, es decir en que años y que estaciones se miden, vamos a empezar el analisis de los contaminantes, exclusivamente. Me refiero a que vamos a estudiar las siguientes variables:
+Ahora que ya sabemos la distribución de los datos, es decir en que años y que estaciones se miden (documento de limpieza_obj1), vamos a empezar el analisis de los contaminantes, exclusivamente. Me refiero a que vamos a estudiar las siguientes variables:
 
 - `NO2`
 - `NO`
 - `NOx`
 - `O3`
 - `SO2`
-- `C6H6`
-- `C7H8`
-- `C8H10`
 - `PM10`
 - `PM2.5`
-- `PM1`
 - `CO`
 
+Ahora, vamos a ir contaminante a contaminante analizandolos.
+
+## PM10
+
+Primero de todo vamos a ver la distribución de los datos de PM10.
+
+```{r}
+hist(df$PM10, breaks = 30, col = "skyblue", main = "Histograma de PM10", xlab = "PM10 (µg/m³)")
+```
+
+Lo que más llama la atención es que esta muy sesgado hacia la derecha:
+La gran mayoría de los valores se agrupan en el rango bajo, mientras que hay una “cola” alargada que llega hasta valores muy altos. Esto indica que, aunque normalmente las concentraciones son bajas, existen episodios puntuales con picos muy elevados.
+
+Esto podría deberse a la presencia de datos atípicos o outliers, que son valores que se desvían significativamente de la tendencia general de los datos. Para confirmar esto, vamos a calcular algunos estadísticos descriptivos.
+
+```{r}
+summary(df$PM10)
+```
+
+Podemos observar que el valor máximo de la variable es 1675, lo cual es muchísimo más alto de lo normal. Vamos a ver a de donde vienen esos valores tan elevados. Para ello, vamos a ver la distribución del contaminante a lo largo del tiempo.
+
+```{r}
+df$FechaHora <- as.POSIXct(df$FechaHora, format = "%Y-%m-%d %H:%M:%S")
+
+ggplot(df, aes(x = FechaHora, y = PM10, group = 1)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 year",    # un tick por año
+    date_labels = "%Y"         # etiqueta con solo el año
+  ) +
+  labs(
+    title = "Evolución temporal de PM10",
+    x     = "Año",
+    y     = expression(PM[10]~"(µg/m"^3*")")
+  ) +
+  theme_minimal()
+```
+
+En la gráfica de enicma podemos observar que los valores se disparan a finales de 2024, vamos a ver las fechas exactas. Esto lo vamos a hacer mostrando la fecha en la que el valor de PM10 supera los 500 por primera vez, que solo se superan a finales de 2024.
+
+```{r}
+min(df$FechaHora[df$PM10 > 500], na.rm = TRUE)
+```
+
+Esta es la fecha en la que se supera por primera vez el valor de 500 (según la OMS es muy peligroso para la salud), y vemos que es el 17 de noviembre de 2024. La DANA en Valencia empezó el 29 de octubre de 2024, por lo que tiene sentido que el pico se produzca en nomviembre y diciembre. 
+
+Además, dado que PM10 son partículas suspendidas en el aire, es normal que en episodios de lluvias intensas se produzcan picos de contaminación.
+
+Para estudiar la distribución de la variable vamos a aislar los valores de la época de la dana, ya que es un episodio excepcional. Nos interesa hacer esto para ver la distribución de la variable en condiciones más normales.
+
+```{r}
+df_sin_DANA <- subset(df, FechaHora < as.POSIXct("2024-11-17 18:00:00"))
+
+ggplot(df_sin_DANA, aes(x = PM10)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de PM10",
+    x     = expression(PM[10]~"(µg/"*m^3*")"),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Ahora, se muestra una distribución un poco más normal, aunque sigue habiendo una asimétria a la derecha. Esto es normal, ya que los contaminantes suelen tener más o menos los mismos valores excepto momentos puntuales en los que se disparan.
+
+Vamos a aplicar una transformación logarítmica a la variable para ver si conseguimos una distribución más normal. Esto es algo que se suele hacer en estadística cuando tenemos datos sesgados.
+
+```{r}
+df_sin_DANA$log_PM10 <- log(df_sin_DANA$PM10 + 1)  # Se suma 1 para evitar log(0)
+ggplot(df_sin_DANA, aes(x = log_PM10)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de log(PM10)",
+    x     = expression(log(PM[10]~"(µg/"*m^3*")")),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Al aplicar la transformación logarítmica a la variable, la distribución se vuelve más simétrica y menos sesgada. Esto es un indicativo de que la transformación ha funcionado y que los datos son más normales.
+
+Ahora vamos a estudiar la distribución en la época de la DANA, para ver si hay diferencias significativas entre la época de la DANA y la época normal. 
+
+```{r}
+df_DANA <- subset(df, FechaHora > as.POSIXct("2024-11-17 18:00:00"))
+ggplot(df_DANA, aes(x = PM10)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de PM10 en la DANA",
+    x     = expression(PM[10]~"(µg/"*m^3*")"),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Vemos que la distribución en la época de la DANA es parecida a la distribución de la variable en condiciones normales, es decir, parece ser que la variable se comporta igual solo que con valores más altos debidos a la DANA.
+
+Vamos a aplicar la transformación logarítmica a la variable para ver si conseguimos una distribución más normal.
+
+```{r}
+df_DANA$log_PM10 <- log(df_DANA$PM10 + 1) 
+ggplot(df_DANA, aes(x = log_PM10)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de log(PM10) en la DANA",
+    x     = expression(log(PM[10]~"(µg/"*m^3*")")),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Al igual que antes, al aplicar la transformación logarítmica a la variable, la distribución se vuelve más simétrica y menos sesgada. Esto es un indicativo de que la transformación ha funcionado y que los datos son más normales.
+
+Ahora vamos a ver la distribucion de todos los datos (DANA + no_DANA), aplicando la transformación logarítmica.
+
+```{r}
+df$log_PM10 <- log(df$PM10 + 1)
+ggplot(df, aes(x = log_PM10)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de log(PM10)",
+    x     = expression(log(PM[10]~"(µg/"*m^3*")")),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+Vemos que la distribución de PM10 al aplicar la transformación logarítmic es bastante normal incluyendo la DANA, excluyendo la DANA o incluso solo durante la DANA. Esto nos indica que el contaminante se comporta más o menos simpre igual, aunque en la DANA los valores son más altos.
+
+#### Comportamiento por zonas
+
+Ahora, vamos a estudiar si hay diferencias significativas en los valores de PM10 dependiendo de la estación de medición. Para ello, vamos a aplicar un ANOVA.
+
+```{r}
+fit <- aov(log_PM10 ~ Origen, data = df_sin_DANA)
+summary(fit)
+```
+
+El valor de F y el p-value indican que podemos rechazar con mucha confianza la hipotesis nula, es decir que hay diferencias significativas entre las medias de los grupos, en este caso las estaciones de medición.
+
+Ahora vamos a ver donde están esas diferencias. Para ello, vamos a aplicar un test de Tukey.
+
+```{r}
+TukeyHSD(fit)
+```
+
+El test de Tukey nos indica que, dado que el p-value en la mayoría de los casos es menor que 0.05, podemos concluir que entre esas zonas hay diferencias significativas. Solo hay dos p-values que son mayores que 0.05:
+
+València Port llit antic Túria   y    València - Centre 
+València - Politècnic    y    València - Pista de Silla
+
+Esto indica que en estas zonas los valores de PM10 son parecidos, esto podría deberse a muchos factores.
+
+Ahora vamos a ver si se cumplen las hipótesis del ANOVA:
+
+1. Normalidad de los residuos
+2. Homocedasticidad (varianzas iguales)
+3. Independencia de los residuos
+Detección de valores influyentes
+
+```{r}
+par(mfrow = c(1,1))
+plot(fit)
+```
+
+El primer gráfico, el de residuos, indica que los residuos estan centrados, no hay patrón y varianza más o menos constante. Podemos observar algunos puntos con numeros, eso nos indica que esos residuos son más altos por 3 desviaciones típicas.
+
+El segundo gráfico, el de QQplot, indica que los residuos siguen una distribución normal. Esto es un indicativo de que la transformación ha funcionado. Existen ligeras desviaciones en las clas pero no son significativas.
+
+El tercer gráfico, el de escala-location, indica que la varianza es más o menos constante. Es decir, hay homoscedasticidad. 
+
+El cuarto gráfico, el de Cook's distance, indica que no hay puntos influyentes. Lo que nos indica es que hay niveles de `Origen` con un tamaño muestral pequeño, pero no afectan.
+
+En resumen, el contaminante PM10 parece verse afectado por el origen de medición, es decir que hay diferencias significativas en los valores dependiendo de la estación de origen.
+
+#### Comportamiento por timepo
+
+Vamos a ver como se comporta el contaminante a lo largo del tiempo. Para ello, vamos a hacer un gráfico.
+
+```{r}
+df_sin_DANA$FechaHora <- as.POSIXct(df_sin_DANA$FechaHora, format = "%Y-%m-%d %H:%M:%S")
+
+ggplot(df_sin_DANA, aes(x = FechaHora, y = PM10, group = 1)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 year",    # un tick por año
+    date_labels = "%Y"         # etiqueta con solo el año
+  ) +
+  labs(
+    title = "Evolución temporal de PM10",
+    x     = "Año",
+    y     = expression(PM[10]~"(µg/m"^3*")")
+  ) +
+  theme_minimal()
+```
+
+En el gráfico, parece haber un ligero comportamiento estacional, es decir, parece que hay subidas y bajadas en los valores de PM10 a lo largo del tiempo. Además, se puede observar que a finales de 2023 y todo 2024 los picos son, en general, más altos.
+
+Ahora vamos a ver un gráfico con la media de PM10 en cada año.
+
+```{r}
+# Cálculo de la media por año
+df_anual <- df_sin_DANA %>%
+  group_by(Año) %>%
+  summarise(media_PM10 = mean(PM10, na.rm = TRUE)) %>%
+  arrange(Año)
+
+# Gráfico con área sombreada y línea en rojo
+ggplot(df_anual, aes(x = Año, y = media_PM10)) +
+  geom_area(fill = "#FF6E6E", alpha = 0.4) +
+  geom_line(color = "#B22222", size = 1.2) +
+  geom_point(color = "#B22222", size = 3) +
+  scale_x_continuous(
+    breaks = 2019:2024,
+    limits = c(2019, 2024)) +
+  labs(
+    title    = "Yearly evolution of the average PM10 concentration",
+    subtitle = "Average values from all stations in Valencia",
+    x        = "Year",
+    y        = "Average of PM10 (µg/m³)",
+    caption  = "Source: your air pollution data"
+  ) +
+  # Tema minimalista con toques de color
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold", color = "#B22222"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60")
+  )
+```
+
+Se puede observar que en 2020 hubo una disminución considerable en los niveles de PM10, probabemente debido a la pandemia de COVID-19 y lsa restricciones que hubo (trafico,..). Luego, los niveles vuelven a aumentar, pero no tanto como en 2019.
+
+Si hacemos un ANOVA, podriamos esperar que los niveles de Año causan diferencias significativas en los niveles de PM10. Vamos a comprobarlo.
+
+```{r}
+# Debemos convertir la variable Año a factor
+df_sin_DANA$Año <- as.factor(df_sin_DANA$Año)
+
+fit_anual <- aov(log_PM10 ~ Año, data = df_sin_DANA)
+summary(fit_anual)
+```
+
+Al igual que ha sucedido con el origen, el p-value es ,ucho menor que 0.05, por lo que podemos rechazar la hipotesis nula y concluir que hay diferencias significativas entre los niveles de PM10 dependiendo del año. Vamos a ver donde están esas diferencias. 
+
+```{r}
+#TukeyHSD(fit_anual)
+
+emm_anual <- emmeans(fit_anual, ~ Año)
+emm_tukey <- confint(emm_anual, adjust = "tukey")
+
+df_emm_anual <- as.data.frame(emm_tukey)
+
+# Gráfico de medias ± IC
+ggplot(df_emm_anual, aes(x = Año, y = emmean, ymin = lower.CL, ymax = upper.CL)) +
+  geom_pointrange(size = 0.7, color = "steelblue") +
+  geom_hline(yintercept = mean(df_sin_DANA$log_PM10, na.rm=TRUE), 
+             linetype = "dashed", color = "gray50") +
+  coord_flip() +
+  labs(
+    title = "Intervalos de confianza (Tukey) de log_PM10 por año",
+    x     = "Año",
+    y     = "Media de log(PM10) ± IC"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title   = element_text(face = "bold", hjust = 0.5),
+    axis.title.y = element_blank()
+  )
+
+TukeyHSD(fit_anual)
+```
+
+Tanto con la gráfica como con los p-values, podemos observar que hay diferencias significativas en todos los años excepto 2023-2024.
+
+Sabiendo que existe una relación entre el año y los niveles de PM10, vamos a ver si durante los meses hay diferencias.
+
+#### Comportamiento por meses
+
+```{r}
+meses_orden <- c("Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                 "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre")
+
+# Calcular media por mes
+df_mensual <- df_sin_DANA %>%
+  mutate(Mes = factor(Mes, levels = meses_orden, ordered = TRUE)) %>%
+  group_by(Mes) %>%
+  summarise(media_PM10 = mean(PM10, na.rm = TRUE)) %>%
+  arrange(Mes) %>%
+  mutate(mes_num = as.integer(Mes))
+
+# Gráfico con esquemas amarillos
+ggplot(df_mensual, aes(x = mes_num, y = media_PM10)) +
+  geom_area(fill = "#FFEB3B", alpha = 0.4) +       # amarillo claro
+  geom_line(color = "#FFC107", size = 1.2) +      # amarillo medio
+  geom_point(color = "#FFC107", size = 3) +
+  scale_x_continuous(
+    breaks = 1:12,
+    labels = meses_orden,
+    limits = c(1, 12)
+  ) +
+  labs(
+    title    = "Evolución anual de la concentración promedio de PM10",
+    subtitle = "Promedios mensuales desde todas las estaciones en Valencia",
+    x        = "Mes",
+    y        = "Promedio de PM10 (µg/m³)",
+    caption  = "Fuente: datos de contaminación del aire"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold", color = "#FFC107"),
+    axis.text         = element_text(color = "gray20"),
+    axis.text.x       = element_text(angle = 45, hjust = 1),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60")
+  )
+```
+
+En el gráfico, se puede observar que los niveles de PM10 son más altos en los primeros 3 meses del año. Los siguientes meses disminuyen considerablemente, pero en verano vuelven a aumentar un poco y luego vuelven a bajar. No parece haber un patrón claro en los meses, pero al realizar un ANOVA, podemos esperar que los meses causan diferencias significativas en los niveles de PM10. Vamos a comprobarlo.
+
+```{r}
+fit_mensual <- aov(log_PM10 ~ Mes, data = df_sin_DANA)
+summary(fit_mensual)
+```
+
+Como esperábamos, el p-value es menor que 0.05, por lo que podemos rechazar la hipotesis nula y concluir que hay diferencias significativas entre los niveles de PM10 dependiendo del mes. Vamos a ver donde están esas diferencias.
+
+```{r}
+TukeyHSD(fit_mensual)
+```
+
+Vemos que la mayoría de los p-values son menores que 0.05. Los que su valor de p-value es mayor que 0.05 son los que en la gráfica se puede observar que los niveles son muy parecidos:
+
+- Mayo y Septiembre
+- Noviembre y Diciembre
+- Abril y Mayo
+- Septiembre y Abril
+
+Viendo esto se me ocurre que los meses de antes y despues de verano son los que tienen niveles parecido, lo mismo sucede con los meses de invierno.
+
+#### Comportamiento por dia de la semana
+
+```{r}
+# 1. Definir el orden correcto de los días
+dias_orden <- c("lunes","martes","miércoles","jueves","viernes","sábado","domingo")
+
+# 2. Agrupar y calcular la media, asegurándote de que Dia_Semana es factor ordenado
+df_semanal <- df_sin_DANA %>%
+  mutate(
+    Dia_Semana = factor(Dia_Semana, levels = dias_orden, ordered = TRUE)
+  ) %>%
+  group_by(Dia_Semana) %>%
+  summarise(media_PM10 = mean(PM10, na.rm = TRUE)) %>%
+  arrange(Dia_Semana) %>%
+  # 3. Crea la variable numérica para el eje x
+  mutate(dia_num = as.integer(Dia_Semana))
+
+# 4. Dibuja el área con eje continuo
+ggplot(df_semanal, aes(x = dia_num, y = media_PM10)) +
+  geom_area(fill = "#2196F3", alpha = 0.4) +       
+  geom_line(color = "#1976D2", size = 1.2) +      
+  geom_point(color = "#1976D2", size = 3) +
+  scale_x_continuous(
+    breaks = 1:7,
+    labels = dias_orden,
+    limits = c(1, 7)
+  ) +
+  labs(
+    title    = "Evolución semanal de la concentración promedio de PM10",
+    subtitle = "Promedios semanales desde todas las estaciones en Valencia",
+    x        = "Día de la semana",
+    y        = "Promedio de PM10 (µg/m³)",
+    caption  = "Fuente: datos de contaminación del aire"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold", color = "#1976D2"),
+    axis.text         = element_text(color = "gray20"),
+    axis.text.x       = element_text(angle = 45, hjust = 1),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60")
+  )
+
+```
+
+En esta ocasión, podemos observar que los niveles de PM10 son más o menos iguales durante la semana excepto los fines de semana, donde los valores parecen disminuir considerablemente. Esto puede deberse a que durante el fin de semana hay menos tráfico y menos actividad industrial, lo que provoca una disminución en los niveles de contaminación.
+
+Suponemos que dependiendo del dia de la semana hay diferencias significativas entre semana laboral y fin de semana. Vamos a comprobarlo.
+
+```{r}
+df_sin_DANA <- df_sin_DANA %>%
+  mutate(
+    Dia_Semana = factor(Dia_Semana,
+                        levels  = dias_orden,
+                        ordered = TRUE))
+
+fit_semanal <- aov(log_PM10 ~ Dia_Semana, data = df_sin_DANA)
+summary(fit_semanal)
+```
+
+El p-value es menor que 0.05, lo que nos indica que podemos rechazar la hipotesis nula y concluir que hay diferencias significativas entre los niveles de PM10 dependiendo del dia de la semana. Vamos a ver donde están esas diferencias. 
+
+Para ello vamos a aplicar un test de Scheffé, que es un test post-hoc que nos permite comparar todas las medias entre sí y ver donde están las diferencias significativas.
+
+
+```{r}
+emm_ds <- emmeans(fit_semanal, ~ Dia_Semana)
+
+emm_sch   <- confint(emm_ds, adjust = "scheffe")
+
+# 3) Pásalo a data.frame
+df_emm <- as.data.frame(emm_sch)
+
+# 4) Gráfico de medias ± IC
+ggplot(df_emm, aes(x = Dia_Semana, y = emmean, ymin = lower.CL, ymax = upper.CL)) +
+  geom_pointrange(size = 0.7, color = "steelblue") +
+  geom_hline(yintercept = mean(df_sin_DANA$log_PM10, na.rm=TRUE), 
+             linetype = "dashed", color = "gray50") +
+  coord_flip() +
+  labs(
+    title = "Intervalos de confianza (Scheffé) de log_PM10 por día de la semana",
+    x     = "Día de la semana",
+    y     = "Media de log(PM10) ± IC"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title   = element_text(face = "bold", hjust = 0.5),
+    axis.title.y = element_blank()
+  )
+
+# 4) Muestra resultados
+summary(comp_sch, infer = c(TRUE, TRUE))
+```
+En la gráfica de arriba podemos observar los intervalos de confianza de las medias de log_PM10 por día de la semana. Si los intervalos se soplapan, significa que no hay diferencias significativas entre esos dias, por lo que observamos que no exiten diferencias significativas entre:
+
+- Martes, Miercoles, Jueves y Viernes
+
+El resto de días si que tienen diferencias significativas entre ellos. Esto tambien se ve reflejado en el resumen del test de Scheffé, cuando el p-values es menor que 0.05, significa que hay diferencias significativas entre esos días.
+
+La causa de esto lo podremos estudiar más adelante, al estudiar factores como el tráfico.
+
+#### Comportamiento por horas
+
+```{r}
+df_hourly <- df_sin_DANA %>%
+  group_by(Hora) %>%
+  summarise(media_PM10 = mean(PM10, na.rm = TRUE)) %>%
+  arrange(Hora)
+
+ggplot(df_hourly, aes(x = Hora, y = media_PM10)) +
+  geom_area(fill = "#FF6E6E", alpha = 0.4) +
+  geom_line(color = "#B22222", size = 1.2) +
+  geom_point(color = "#B22222", size = 3) +
+  scale_x_continuous(breaks = 0:23, limits = c(0, 23)) +
+  labs(
+    title    = "Hourly evolution of the average PM10 concentration",
+    subtitle = "Average values from all stations in Valencia",
+    x        = "Hour of the day",
+    y        = "Average of PM10 (µg/m³)",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold", color = "#B22222"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60")
+  )
+
+```
+
+En este caso, podemos observar mucha variación en los niveles de PM10 a lo largo del día. Los niveles son bajos por la madrugada, a partir de las 6 sufren un aumento muy notable, alcanzando su máximo a las 8 de la mañana. Luego, a medida que pasa el dia va disminuyendo, hasta las 17 horas, que vuelve a incrementar. Esto podría deberse a la temperatura o el tráfico, lo cual comprobaremos más adelante.
+
+Al hacer un ANOVA, podemos suponer que los niveles de PM10 dependen de la hora del día. Vamos a comprobarlo.
+
+```{r}
+# Convertir Hora a factor
+df_sin_DANA$Hora <- as.factor(df_sin_DANA$Hora)
+
+fit_horario <- aov(log_PM10 ~ Hora, data = df_sin_DANA)
+summary(fit_horario)
+```
+
+Efectivamente, el p-value es menor que 0.05, lo que nos indica que podemos rechazar la hipotesis nula y concluir que hay diferencias significativas entre los niveles de PM10 dependiendo de la hora del día. 
+
+Ahora que ya hemos visto el comportamiento general de PM10, vamos a estudiar sus faltantes para ver que hacer con ellos.
+
+#### Faltantes
+
+Primero de todo, vamos a ver el porcentaje de faltantes que tenemos en la variable PM10.
+
+```{r}
+sum(is.na(df$PM10)) / nrow(df) * 100
+```
+
+Tenemos un 40% de faltantes, vamos a ver en que estaciones tenemos más faltantes.
+
+```{r}
+df %>%
+  filter(is.na(PM10)) %>%
+  count(Origen) %>%
+  arrange(desc(n)) %>%
+  ggplot(aes(x = reorder(Origen, -n), y = n)) +
+  geom_bar(stat = "identity", fill = "firebrick") +
+  labs(title = "Número de valores faltantes (NA) en PM10 por estación",
+       x = "Estación (Origen)",
+       y = "Número de NAs") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Resalta que hay varias estaciones con un número elevado de faltantes, lo cual se puede deber a que no se mide PM10 en esas estaciones. 
+
+```{r}
+resumen_PM10 <- df %>%
+  select(Origen, PM10) %>%
+  pivot_longer(
+    cols      = -Origen,
+    names_to  = "Variable",
+    values_to = "Valor"
+  ) %>%
+  filter(Variable == "PM10", !is.na(Valor)) %>%
+  group_by(Variable) %>%
+  summarise(
+    num_estaciones    = n_distinct(Origen),
+    lista_estaciones  = paste(sort(unique(Origen)), collapse = ", ")
+  ) %>%
+  ungroup()
+
+print(resumen_PM10)
+```
+
+La variable PM10 se mide en 15 estaciones, las estaciones que no la miden son:
+
+- València - Bulevard Sud
+- Paterna - CEAM
+- València - Nazaret Met-2
+- València - Vivers
+- València-Conselleria Meteo
+
+Que son las que más faltantes tienen. Ahora vamos a descartar estas estaciones.
+
+```{r}
+no_tomar <- c("València - Bulevard Sud",
+              "Paterna - CEAM",
+              "València - Nazaret Met-2",
+              "València - Vivers",
+              "València-Conselleria Meteo")
+
+estaciones_pm10 <- setdiff(unique(df$Origen), no_tomar)
+
+df_plot <- df %>%
+  filter(Origen %in% estaciones_pm10) %>%
+  group_by(Origen) %>%
+  summarise(
+    n     = sum(is.na(PM10)),
+    total = n(),                  # total de filas por estación
+    pct   = n / total * 100       # porcentaje de NAs
+  ) %>%
+  arrange(desc(n))
+
+# 2) Gráfico con porcentaje como etiqueta
+ggplot(df_plot, aes(x = reorder(Origen, -n), y = n)) +
+  geom_col(fill = "firebrick") +
+  geom_text(aes(label = paste0(round(pct,1), "%")),
+            vjust = -0.5, size = 3) +
+  labs(
+    title = "Número y % de valores faltantes (NA) en PM10 por estación",
+    x     = "Estación (Origen)",
+    y     = "Número de NAs"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+En el nuevo gráfico, podemos observar que la mayoría de los faltantes se encuentran en Torrent, donde hay un 43% de faltantes. Esos porcentajes indican la proporción de faltantes en esa estacion.
+
+Ahora vamos a ver cuanto faltantes tenemos en total, es decir, en todas las estaciones.
+
+```{r}
+resumen_total <- df %>%
+  filter(Origen %in% estaciones_pm10) %>%
+  summarise(
+    total_obs     = n(),
+    faltantes     = sum(is.na(PM10)),
+    pct_faltantes = faltantes / total_obs * 100
+  )
+
+print(resumen_total)
+```
+
+Al haber eliminado las estaciones que no miden PM10, nos quedamos con un poco menos de 5% de faltantes. Antes de imputarlos, vamos a ver si hay algún patrón en los faltantes. 
+
+Por años:
+
+```{r}
+df_plot <- df %>%
+  filter(
+    Origen %in% estaciones_pm10,  # opcional: solo ciertas estaciones
+    is.na(PM10)                   # quedarnos solo con los NAs
+  ) %>%
+  count(Año, name = "n_missing") %>%  # contar NAs por cada valor de Año
+  ungroup() %>%
+  mutate(
+    total_missing = sum(n_missing),            # total de NAs en todos los años
+    pct_total     = n_missing / total_missing * 100  # % sobre el total de NAs
+  ) %>%
+  arrange(Año)
+
+# 2) Gráfico de barras con porcentaje de faltantes por año
+ggplot(df_plot, aes(x = factor(Año), y = pct_total)) +
+  geom_col(fill = "firebrick") +
+  geom_text(aes(label = paste0(round(pct_total, 1), "%")),
+            vjust = -0.5, size = 3) +
+  labs(
+    title    = "Porcentaje de valores faltantes de PM10 por año",
+    subtitle = "Cada barra muestra qué % del total de NAs ocurre en ese año",
+    x        = "Año",
+    y        = "% de NAs respecto al total"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x    = element_text(face = "bold"),
+    plot.title     = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle  = element_text(hjust = 0.5)
+  )
+```
+
+ La mayoría de los faltantes se concentran en 2023. Ahora vamos a hacer lo mismo pero por meses.
+
+```{r}
+df_plot <- df %>%
+  filter(Origen %in% estaciones_pm10) %>%              # opcional: filtrar solo estaciones_pm10
+  mutate(Mes = factor(Mes, levels = meses_orden, ordered = TRUE)) %>%
+  filter(is.na(PM10)) %>%                              # quedarnos solo con los NAs
+  count(Mes, name = "n_missing") %>%                   # contar NAs por mes
+  ungroup() %>%
+  mutate(
+    total_missing = sum(n_missing),                    # total de NAs
+    pct_total     = n_missing / total_missing * 100    # % de cada mes sobre el total
+  )
+
+# 2) Gráfico
+ggplot(df_plot, aes(x = Mes, y = pct_total)) +
+  geom_col(fill = "firebrick") +
+  geom_text(aes(label = paste0(round(pct_total, 1), "%")),
+            vjust = -0.5, size = 3) +
+  labs(
+    title = "Porcentaje de valores faltantes de PM10 por mes",
+    subtitle = "Cada barra muestra qué % del total de NAs ocurre en ese mes",
+    x = "Mes",
+    y = "% de NAs respecto al total"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+```
+
+En este gráfico, observamos que la mayoría de los faltantes se encuentran en Septiembre. Ahora lo mismo para días de la semana.
+
+```{r}
+df_plot <- df %>%
+  filter(
+    Origen   %in% estaciones_pm10,   # solo estas estaciones (si aplica)
+    is.na(PM10)                      # quedarnos sólo con los NA
+  ) %>%
+  count(Dia_Semana, name = "n_missing") %>%  # contar NAs por día
+  ungroup() %>%
+  mutate(
+    total_missing = sum(n_missing),          # total de NAs
+    pct_total     = n_missing / total_missing * 100  # % sobre el total
+  ) %>%
+  # aseguramos el orden correcto de los días
+  mutate(Dia_Semana = factor(Dia_Semana, levels = dias_orden)) %>%
+  arrange(Dia_Semana)
+
+# 2) Gráfico
+ggplot(df_plot, aes(x = Dia_Semana, y = pct_total)) +
+  geom_col(fill = "firebrick") +
+  geom_text(aes(label = paste0(round(pct_total, 1), "%")),
+            vjust = -0.5, size = 3) +
+  labs(
+    title    = "Porcentaje de valores faltantes de PM10 por día de la semana",
+    subtitle = "Cada barra muestra qué % del total de NAs ocurre en ese día",
+    x        = "Día de la semana",
+    y        = "% de NAs respecto al total"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x  = element_text(angle = 45, hjust = 1),
+    plot.title   = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle= element_text(hjust = 0.5)
+  )
+```
+
+Parece ser, que los faltantes se distribuyen uniformemente entre los días de la semana. Ahora vamos a ver por horas del dia.
+
+```{r}
+df_plot <- df %>%
+  filter(
+    Origen %in% estaciones_pm10,   # filtrar solo las estaciones de interés
+    is.na(PM10)                    # quedarnos solo con los NAs
+  ) %>%
+  count(Hora, name = "n_missing") %>%  # contar NAs por hora
+  ungroup() %>%
+  mutate(
+    total_missing = sum(n_missing),           # total de NAs
+    pct_total     = n_missing / total_missing * 100  # % sobre el total
+  ) %>%
+  arrange(Hora)
+
+# 2) Gráfico de barras con porcentaje de faltantes por hora
+ggplot(df_plot, aes(x = Hora, y = pct_total)) +
+  geom_col(fill = "firebrick") +
+  geom_text(aes(label = paste0(round(pct_total, 1), "%")),
+            vjust = -0.5, size = 3) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title    = "Porcentaje de valores faltantes de PM10 por hora del día",
+    subtitle = "Cada barra muestra qué % del total de NAs ocurre en esa hora",
+    x        = "Hora",
+    y        = "% de NAs respecto al total"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x  = element_text(face = "bold"),
+    plot.title   = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle= element_text(hjust = 0.5)
+  )
+```
+
+Sucede los mismo que con los días de la semana, los faltantes se distribuyen uniformemente entre las horas del día. 
+
+Por lo que podemos conluir que parece haber un patron entre los año y meses, ya que ahi se ven diferencias significativas. En el resto de variables, no parece haber un patrón claro.
+
+Ahora vamos a comprobar si son faltantes de una hora (solo NA en una hora) o son cadenas de mas de una hora de faltantes.
+
+```{r}
+resultados_pm10 <- df %>%
+  filter(Origen %in% estaciones_pm10) %>%   # sólo estaciones de interés
+  filter(!is.na(Fecha), !is.na(Hora)) %>%  # por si hubiera NAs en FECHA/HORA
+  select(Origen, Fecha, Hora, PM10) %>%     # nos quedamos con PM10
+  arrange(Origen, Fecha, Hora) %>% 
+  group_by(Origen, Fecha) %>% 
+  summarise(
+    max_run_na = {
+      runs <- rle(is.na(PM10))
+      if (any(runs$values)) max(runs$lengths[runs$values]) else 0
+    },
+    .groups = "drop"
+  ) %>% 
+  filter(max_run_na >= 2) %>%             # sólo días con >=24 h consecutivas NA
+  group_by(Origen) %>% 
+  summarise(
+    n_dias       = n_distinct(Fecha),
+    dias_con_run = paste(sort(unique(Fecha)), collapse = ", "),
+    .groups      = "drop"
+  )
+
+print(resultados_pm10)
+```
+
+
+## PM2.5
+
+Ahora vamos a hacer lo mismo pero para el contaminante PM2.5. Esperamos que los resultados sean similares a los de PM10, ya que son contaminantes similares y tienen fuentes de emisión similares.
+
+Primero de todo, vamos a ver la distribución.
+
+```{r}
+hist(df$PM2.5, breaks = 30, col = "skyblue", main = "Histograma de PM2.5", xlab = "PM2.5 (µg/m³)")
+```
+
+Como esperábamos, tiene una distribución parecida a la de PM10, solo que menos sesgada a la derecha. Al igual que con PM10, vamos a ver algunos estadisticos descriptivos.
+
+```{r}
+summary(df$PM2.5)
+```
+
+Como podemos ver, el valor máximo es 309, el cual esta dentro del rango 'peligroso' según la OMS y EPA. En el caso de PM10, los valores tan sumamente altos eran debidos a la DANA, vamos a ver si aquí sucede lo mismo.
+
+```{r}
+ggplot(df, aes(x = FechaHora, y = PM2.5, group = 1)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 year",    
+    date_labels = "%Y"        
+  ) +
+  labs(
+    title = "Evolución temporal de PM2.5",
+    x     = "Año",
+    y     = expression(PM[2.5]~"(µg/m"^3*")")
+  ) +
+  theme_minimal()
+```
+
+Podemos observar, que si que hay valores altos a finales de 2024, la fecha de la DANA. Pero a la vez observamos que hay picos altos en otras fechas, como en 2020 y 2022. Según la OMS, a partir de 125 µg/m3 es insalubre,y a partir de 200 µg/m3 peligroso, por lo que antes de seguir adelante, vamos a analizar esos picos peligrosos.
+
+Primero vamos a ver las fechas de los picos altos, es decir los valores superiores a 200 µg/m3 (excluyendo la DANA).
+
+```{r}
+fechas_valores_exceso <- df_sin_DANA %>%
+  filter(`PM2.5` > 200) %>%
+  select(Fecha, Hora, Origen, `PM2.5`) %>%      
+  arrange(Fecha)
+
+print(fechas_valores_exceso)
+```
 
 
 
+
+
+
+
+Al igual que antes, vamos a ver la distribución de PM2.5 durante la época 'normal', es decir sin la DANA.
+
+```{r}
+ggplot(df_sin_DANA, aes(x = PM2.5)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de PM2.5",
+    x     = expression(PM[2.5]~"(µg/"*m^3*")"),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Al excluir la DANA, la distribución parece haberse suavizado un poco, pero sigue estando sesgada a la derecha. Ahora vamos a aplicar una transformación logaritmica para ver si la distribución se normaliza un poco.
+
+```{r}
+df_sin_DANA$log_PM2.5 <- log(df_sin_DANA$PM2.5 + 1)
+
+ggplot(df_sin_DANA, aes(x = log_PM2.5)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de log(PM2.5)",
+    x     = expression(log(PM[2.5]~"(µg/"*m^3*")")),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Pese a que ahora se asemeja más a una distribución normal, sigue teniendo cierta asimetría. Ahora vamos a ver el comportamiento de PM2.5 durante la DANA.
+
+```{r}
+ggplot(df_DANA, aes(x = PM2.5)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de PM2.5",
+    x     = expression(PM[2.5]~"(µg/"*m^3*")"),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Durante la DANA, los valores de PM2.5 estan un poco menos sesgados a la derecha, vamos a aplicar la transformación logaritmica para ver si se normaliza un poco.
+
+```{r}
+df_DANA$log_PM2.5 <- log(df_DANA$PM2.5 + 1)
+
+ggplot(df_DANA, aes(x = log_PM2.5)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de log(PM2.5)",
+    x     = expression(log(PM[2.5]~"(µg/"*m^3*")")),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Sucede algo similar que excluyendo la DANA, la distribución se asimila más a una normal, pero sigue teniendo cierta asimetría, ambos casos tienen problemas en la cola izquierda.
+
+Ahora vamos a ver la distribución logaritmica de todo junto, es decir con la DANA.
+
+```{r}
+df$log_PM2.5 <- log(df$PM2.5 + 1)
+
+ggplot(df, aes(x = log_PM2.5)) +
+  geom_histogram(
+    bins  = 30,
+    fill  = "lightblue",
+    color = "white"
+  ) +
+  labs(
+    title = "Histograma de log(PM2.5)",
+    x     = expression(log(PM[2.5]~"(µg/"*m^3*")")),
+    y     = "Frecuencia"
+  ) +
+  theme_minimal()
+```
+
+Otra vez, tenemos una distribución parecida a la normal, pero con problemas en la cola izquierda.
+
+#### Comportamiento por zonas
+
+Ahora vamos a ver si hay diferencias significativas entre los niveles de PM2.5 dependiendo de la zona. Para ello, vamos a hacer un ANOVA.
+
+```{r}
+fit_pm2.5 <- aov(log_PM2.5 ~ Origen, data = df_sin_DANA)
+summary(fit_pm2.5)
+```
+
+Al realizar un ANOVA, observamos un p-value mucho menor que 0.05 por lo que podemos rechazar la hipotesis nula con bastnate confianza, lo cual significa que hay diferencias significativas entre los niveles de PM2.5 dependiendo de la zona. Vamos a ver donde están esas diferencias. Esto lo vamos a realizar con un test de Tukey, que es un test post-hoc que nos permite comparar todas las medias entre sí y ver donde están las diferencias significativas.
+
+```{r}
+TukeyHSD(fit_pm2.5)
+```
+
+Al realizar el test de Tukey, nos sale que hay diferencias significativas entre la mayoría de las estaciones, excepto entre:
+
+- València Port Moll Trans. Ponent   y   Torrent-El Vedat
+- València - Molí del Sol-Quart de Poblet
 
 
 
