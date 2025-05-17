@@ -1,0 +1,490 @@
+---
+title: "Limpieza y AED de Espacios Verdes"
+author: "Fernando Martínez Gómez"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+  
+```{r include=FALSE}
+# Manejo de datos
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(readr)
+library(naniar)
+
+# Representación geoespacial
+library(jsonlite)
+library(stringr)
+library(leaflet)
+library(htmlwidgets)
+```
+
+# **Exploración preliminar de los datos**
+
+```{r, results='hide'}
+df <- read_delim(
+    "../../../data/raw/zonas_verdes/espacios_verdes.csv",
+    delim = ";",
+    show_col_types = FALSE
+)
+head(df)
+```
+
+```{r}
+glimpse(df)
+```
+
+## Cambiar el nombre de las variables
+
+Los nombres de las columnas están en español y valenciano, por lo que voy a cambiarlos para que estén únicamente en español y sea más fácil trabajar con ellos.
+
+```{r}
+df <- rename(df,
+    "Id_Jardin" = "Id Jardí / Id. Jardín",
+    "Nombre" = "Nom / Nombre",
+    "Barrio" = "Barri / Barrio",
+    "Tipologia" = "Tipologia / Tipología",
+    "Area" = "Àrea / Área",
+    "Num_elementos_fitness" = "Número Elementos Fitness",
+    "Superficie_Huerto_Urbano" = "Superficie Huerto Urbano",
+    "Distrito_Municipal" = "DM",
+    "Ud_Gestion" = "Ud. Gestion",
+)
+colnames(df)
+```
+
+## Cambiar el tipo de las variables
+
+También voy a cambiar la clase de algunas columnas para que sea más fácil de trabajar con ellas.
+
+```{r}
+df$Barrio <- as.factor(df$Barrio)
+df$Tipologia <- as.factor(df$Tipologia)
+df$Zona <- as.factor(df$Zona)
+df$Distrito_Municipal <- as.factor(df$Distrito_Municipal)
+df$Ud_Gestion <- as.factor(df$Ud_Gestion)
+
+print("Categorías de Barrio")
+levels(df$Barrio)
+
+print("Categorías de Tipología")
+levels(df$Tipologia)
+
+print("Categorías de Zona")
+levels(df$Zona)
+
+print("Categorías de Distrito_Municipal")
+levels(df$Distrito_Municipal)
+
+print("Categorías de Ud_Gestion")
+levels(df$Ud_Gestion)
+```
+
+## Comprobar que los nombres de las categorías son correctos
+
+### Categorías de *Barrio*
+
+```{r}
+levels(df$Barrio)
+```
+
+Las siguientes categorías hacen referencia al mismo barrio, por lo que voy a unificarlas:
+
+-   "EL CARME" y "CARME"
+
+-   "EXPOSICIO" y "EXPOSICION"
+
+-   "EL GRAO" y "EL GRAU"
+
+-   "LA CREU DEL GRAO" y "LA CREU DEL GRAU"
+
+-   "SANT LLORENÇ" y "SANT LLORENS"
+
+-   "LES TENDETES" y "TENDETES"
+
+-   "TORRE" y "TORREFIEL"
+
+-   "EL FORN D'ALCEDO" y "FORN D'ALCEDO"
+
+-   "EL BOTANIC" y "BOTANIC"
+
+-   "EL PLA DEL REIAL" y "PLA DEL REIAL"
+
+-   "LA PETXINA" y "PETXINA"
+
+```{r}
+df <- df %>% mutate(Barrio = recode(Barrio, 
+                                    "EL CARME" = "CARME",
+                                    "EXPOSICIO" = "EXPOSICION",
+                                    "EL GRAO" = "EL GRAU",
+                                    "LA CREU DEL GRAO" = "LA CREU DEL GRAU",
+                                    "SANT LLORENÇ" = "SANT LLORENS", 
+                                    "LES TENDETES" = "TENDETES",
+                                    "TORRE" = "TORREFIEL",
+                                    "EL FORN D'ALCEDO" = "FORN D'ALCEDO",
+                                    "EL BOTANIC" = "BOTANIC",
+                                    "EL PLA DEL REIAL" = "PLA DEL REIAL",
+                                    "LA PETXINA" = "PETXINA"))
+```
+
+```{r}
+length(levels(df$Barrio))
+```
+
+### Categorías de *Tipologia*
+
+```{r}
+levels(df$Tipologia)
+```
+
+Las siguientes categorías hacen referencia a la misma tipología, por lo que voy a unificarlas:
+
+-   "Jardines Barrio Plaza" y "Jardines Especial Protección" ("Jardines")
+
+```{r}
+df <- df %>% mutate(Tipologia = recode(Tipologia, 
+                                "Jardines Barrio Plaza" = "Jardines Especial Protección"))
+df <- df %>% mutate(Tipologia = recode(Tipologia, 
+                                "Jardines Especial Protección" = "Jardines"))
+```
+
+### Categorías de *Zona*
+
+```{r}
+levels(df$Zona)
+```
+
+### Categorías de *Distrito_Municipal*
+
+```{r}
+levels(df$Distrito_Municipal)
+```
+
+Las siguientes categorías hacen referencia al mismo barrio, por lo que voy a unificarlas:
+
+-   "LA SAIDIA" y "SAIDIA"
+
+-   "POBLATS MARÍTIMS" y "POBLATS MARITIMS"
+
+-   "SANT PAU" y "CAMPANAR"
+
+```{r}
+df <- df %>% mutate(Distrito_Municipal = recode(Distrito_Municipal, 
+                                "LA SAIDIA" = "SAIDIA",
+                                "POBLATS MARÍTIMS" = "POBLATS MARITIMS",
+                                "SANT PAU" = "CAMPANAR"))
+```
+
+```{r}
+length(levels(df$Distrito_Municipal))
+```
+
+```{r}
+levels(df$Distrito_Municipal)
+```
+
+## Descartar variables sin utilidad
+
+Me llaman la atención las variables *geo_shape* y *geo_point_2d*. Voy a investigar más sobre ellas.
+
+```{r}
+df$geo_shape[1]
+```
+
+```{r}
+# Función para convertir el string en un objeto JSON en R.
+convertir_a_json <- function(geo_string) {
+  # Quitar comillas simples inicial y final si existen
+  geo_string <- str_replace_all(geo_string, "^'|'$", "")
+  json_obj <- fromJSON(geo_string)
+  return(json_obj)
+}
+
+# Función para intercambiar las coordenadas de un par (de [lon, lat] a [lat, lon]) 
+extract_and_swap <- function(x) {
+  # Eliminar dimensiones extra (drop() quita dimensiones de arrays innecesarias)
+  m <- drop(x)
+  # Si se reduce a vector (un solo par), forzamos convertirlo a matriz
+  if (is.null(dim(m))) {
+    m <- matrix(m, ncol = 2, byrow = TRUE)
+  }
+  # Intercambiamos columnas para pasar de [lon, lat] a [lat, lon]
+  swapped <- m[, c(2, 1)]
+  return(swapped)
+}
+
+# Convertir el string (df$geo_shape[1]) a objeto JSON
+geo_obj <- convertir_a_json(df$geo_shape[20])
+
+# Extraer cada bloque de coordenadas y aplicar extract_and_swap para obtener una matriz de dos columnas.
+coords_matrices <- lapply(geo_obj$coordinates, extract_and_swap)
+
+# Unir todas las matrices en una sola (apilando las filas)
+all_coords <- do.call(rbind, coords_matrices)
+
+# Extraer los vectores numéricos de latitudes y longitudes
+lats <- as.numeric(all_coords[, 1])
+lons <- as.numeric(all_coords[, 2])
+
+# Opcional: visualizar los rangos para confirmar que los valores sean válidos
+cat("Rango latitudes:", range(lats, na.rm = TRUE), "\n")
+cat("Rango longitudes:", range(lons, na.rm = TRUE), "\n")
+
+# Crear el mapa con leaflet: se centra en la primera coordenada con zoom 16,
+# se dibuja la polilínea y se añaden marcadores en cada punto.
+mapa <- leaflet() %>% 
+  addTiles() %>% 
+  setView(lng = lons[1], lat = lats[1], zoom = 16) %>% 
+  addPolylines(lng = lons, lat = lats, color = "blue")
+
+# Agregar un marcador para cada coordenada (opcional)
+for(i in seq_along(lats)){
+  mapa <- mapa %>% addMarkers(lng = lons[i], lat = lats[i])
+}
+
+# Guardar el mapa en un archivo HTML y abrirlo en el navegador
+saveWidget(mapa, "geo_shape.html", selfcontained = TRUE)
+browseURL("geo_shape.html")
+```
+
+Tras haberlo investigado, ***geo_shape*** es una variable que nos da la forma del espacio verde en un formato que no es fácil de trabajar, y además en algunas isntancias contiene errores que dificultan todavía más el trabajo con esta variable. Por lo tanto, voy a reservar esta variable aparte por si hiciera falta más adelante.
+
+```{r}
+geo_shape <- df$geo_shape
+df <- df %>% select(-geo_shape)
+```
+
+```{r}
+head(df$geo_point_2d)
+```
+
+La variable ***geo_point_2d*** está en un formato adecuado y sí es útil para trabajar con ella.
+
+Además, la variable ***Ud_Gestion*** no aporta información relevante, por lo que se va a excluir también.
+
+```{r}
+ud_gestion <- df$Ud_Gestion
+df <- df %>% select(-Ud_Gestion)
+```
+
+------------------------------------------------------------------------
+
+# **Valores faltantes**
+
+```{r}
+miss_var_summary(df)
+```
+
+En el caso de la variable ***Num_elementos_fitness***, hay demasiados valores faltantes (52%), por lo que, sumado a que no es una variable que pueda ser muy relevante para lo que se quiere estudiar, he dicidido no usarla.
+
+La variable ***Superficie_Huerto_Urbano*** también tiene muchos valores faltantes (52%), y además ya hay una base de datos dedicada exclusivamente a los huertos, por lo que tampoco se va a considerar en esta base de datos.
+
+```{r}
+superficie_huerto_urbano <- df$Superficie_Huerto_Urbano
+num_elementos_fitness <- df$Num_elementos_fitness
+df <- df %>% select(-Superficie_Huerto_Urbano, -Num_elementos_fitness)
+```
+
+```{r}
+colnames(df)
+```
+
+## Faltantes de *geo_point_2d*
+
+```{r}
+filter(df, is.na(df$geo_point_2d))
+```
+
+Observando los valores de *Nombre*, *Barrio* y *geo_shape* para cada isntancia con los valores faltantes de *geo_point_2d*, se ha podido recuperar estos dos valores faltantes de manera precisa.
+
+```{r}
+df$geo_point_2d[df$OBJECTID == "1193"] <- "39.452616240442325, -0.40174366308528264"
+df$geo_point_2d[df$OBJECTID == "1552"] <- "39.46131299674249, -0.40406994923212586"
+df[df$OBJECTID == "1193", ]
+df[df$OBJECTID == "1552", ]
+```
+
+## Faltantes de *Barrio*, *Tipologia* y *Distrito_Municipal*
+
+```{r}
+filter(df, is.na(df$Barrio))
+```
+
+Mediante las coordenadas de *geo_point_2d* se ha podido recuperar el barrio, la tipología y el distrito municipal de la instancia con valores faltantes en estas variables.
+
+```{r}
+df$Barrio[df$OBJECTID == "1925"] <- "BENICALAP"
+df$Tipologia[df$OBJECTID == "1925"] <- "Parques Urbanos"
+df$Distrito_Municipal[df$OBJECTID == "1925"] <- "BENICALAP"
+df[df$OBJECTID == "1925", ]
+```
+
+------------------------------------------------------------------------
+
+# **Valores Duplicados**
+
+## Filas
+
+```{r}
+df[duplicated(df) | duplicated(df, fromLast = TRUE), ]
+```
+
+No hay filas duplicadas en la base de datos.
+
+## Identificadores
+
+```{r}
+df[duplicated(df$OBJECTID) | duplicated(df$OBJECTID, fromLast = TRUE), ]
+```
+
+```{r}
+df[duplicated(df$Id_Jardin) | duplicated(df$Id_Jardin, fromLast = TRUE),]
+```
+
+Tampoco hay identificadores duplicados en la base de datos.
+
+------------------------------------------------------------------------
+
+# **Valores Atípicos**
+
+## Variables constantes o categorías con pocos valores
+
+Ahora pasamos a ver si hay alguna variable constante o casi constante o alguna categoría con muy pocos valores.
+
+### *Barrio*
+
+```{r}
+table(df$Barrio)
+```
+
+Hay muchos barrios con un único valor, por lo que hay que si es mejor trabajar por distritos.
+
+### *Distrito_Municipal*
+
+```{r}
+ggplot(df, aes(x = Distrito_Municipal)) +
+  geom_bar() +
+  coord_flip() +
+  labs(title = "Distribución de los espacios verdes por distrito municipal")
+```
+
+```{r}
+table(df$Distrito_Municipal)
+```
+
+En efecto, los distritos al agrupar diferentes barrios tienen más valores, por lo que es mejor trabajar con ellos.
+
+```{r}
+df_resumen <- df %>%
+  group_by(Distrito_Municipal) %>%
+  summarise(Barrios = paste(unique(Barrio), collapse = ", "))
+
+df_resumen
+```
+
+Hay que comprobar que no haya barrios que pertenezcan a más de un distrito.
+
+```{r}
+df %>% 
+  group_by(Barrio) %>% 
+  summarise(n_dm = n_distinct(Distrito_Municipal)) %>% 
+  filter(n_dm > 1)
+```
+
+Como hay barrios en más de un distrito, hay que solucionarlo mirando en el mapa. Tras haberlo hecho, se ha decidido incluir los barrios en estos distritos: - BETERO en POBLATS MARITIMS - CAMI REAL en JESUS - L'ILLA PERDUDA en ALGIROS - PUNTA en QUATRE CARRERES - RAIOSA en JESUS - TORREFIEL en RASCANYA
+
+```{r}
+df$Distrito_Municipal[df$Barrio == "BETERO"] <- "POBLATS MARITIMS"
+df$Distrito_Municipal[df$Barrio == "CAMI REAL"] <- "JESUS"
+df$Distrito_Municipal[df$Barrio == "L'ILLA PERDUDA"] <- "ALGIROS"
+df$Distrito_Municipal[df$Barrio == "PUNTA"] <- "QUATRE CARRERES"
+df$Distrito_Municipal[df$Barrio == "RAIOSA"] <- "JESUS"
+df$Distrito_Municipal[df$Barrio == "TORREFIEL"] <- "RASCANYA"
+```
+
+### *Zona*
+
+```{r}
+table(df$Zona)
+```
+
+Aunque hayan pocos valores para la zona del Turia, no se pueden suprimir ni modificar porque es una zona con muchos m² de espacios verdes.
+
+### *Tipologia*
+
+```{r}
+table(df$Tipologia)
+```
+
+## Área
+
+### Distribución general de *Área*
+
+Vamos a ver cómo se distribuyen los valores de la variable *Area*.
+
+```{r}
+ggplot(df, aes(x = Area)) +
+  geom_histogram(bins = 100) +
+  labs(title = "Distribución de los espacios verdes por área", x = "Área (m²)", y = "Frecuencia")
+```
+
+Como se aprecia en el histograma, hay muchos valores atípicos en la variable *Area*. Sin embargo, estos valores atípicos no son errores, sino que se deben a que hay espacios verdes de gran tamaño en la ciudad de Valencia. Vamos a investigar si hay algún distrito en el que se concentren estos espacios verdes de gran tamaño.
+
+```{r}
+summary(df$Area)
+```
+
+Un 75% de los valores está por debajo de los 5000 m². Vamos a ver cómo se distribuyen dependiendo del distrito y de la Tipología.
+
+Ahora, vamos a comparar el área con el distrito municipal, la tipología y la zona.
+
+### *Área* según *Distrito_Municipal*
+
+```{r}
+ggplot(df, aes(x = Distrito_Municipal, y = Area)) +
+  geom_boxplot(outlier.colour = "red  ", outlier.shape = 16) +
+  coord_flip() +
+  labs(title = "Boxplot general de área", y = "Área (m²)")
+```
+
+En el gráfico de caja y bigotes del área según el distrito, sobresale el Cauce del Turia con espacios verdes de gran tamaño. Esto es algo normal ya que el Cauce del Turia tiene una gran cantidad de vegetación.
+
+### *Área* según *Tipologia*
+
+```{r}
+ggplot(df, aes(x = Tipologia, y = Area)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 16) +
+  coord_flip() +
+  labs(title = "Boxplot general de área", y = "Área (m²)")
+```
+
+EL gráfico de caja y bigotes revela que los parques urbanos, seguidos de los bulevares, son los espacios verdes con mayor tamaño.
+
+### *Área* según *Zona*
+
+```{r}
+ggplot(df, aes(x = Zona, y = Area)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 16) +
+  coord_flip() +
+  labs(title = "Boxplot general de área", y = "Área (m²)")
+```
+
+### Conclusiones de *Área*
+
+-   Si comparamos la frecuencia de los espacios verdes en los distintos **distritos** con el área de los mismos, podemos ver que hay una relación inversa entre el área de los espacios verdes y la cantidad de estos en un distrito. Es decir, en los distritos con menos espacios verdes hay un mayor área de estos.
+
+-   Lo mismo sucede con la **tipología** de los espacios verdes. Los parques urbanos y los bulevares son los espacios verdes con mayor área, pero también son los que menos abundan.
+
+-   Por último, este patrón también se encuentra en la **zona**, ya que la zona del Turia es la que tiene los espacios verdes más grandes, pero también es la que menos espacios verdes tiene, mientras que la zona Norte y Sur tienen aproximadamente la misma proporción de área según la cantidad de espacios verdes.
+
+
+# **Guardar la base de datos limpia**
+
+```{r}
+write_csv(df, "../../../data/cleaned/zonas_verdes/espacios_verdes_limpio.csv")
+```
+

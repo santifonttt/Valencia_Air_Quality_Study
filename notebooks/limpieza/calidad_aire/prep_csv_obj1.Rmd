@@ -1,0 +1,491 @@
+---
+title: "Estudio de los contaminantes"
+output: html_document
+date: "2025-05-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(naniar)
+library(lubridate)
+library(zoo)
+library(stringr)
+```
+
+
+```{r}
+df <- read.csv("../../../data/raw/calidad_aire/conjunto_estaciones.csv", stringsAsFactors = FALSE)
+```
+
+### En este estudio vamos a analizar los contaminantes de la base de datos por zonas y años
+
+
+Primero de todo, vamos a ver que variables tenemos en la base de datos.
+
+```{r}
+colnames(df)
+```
+
+Podemos observar, tenemos muchas variables con nombres indefinidos por lo que no poedmos saber que son, antes de borrarlas vamos a ver el porcentaje de nulos de cada variable.
+
+```{r}
+miss_var_summary(df)
+```
+
+Aqui podemos ver que muchas variables tienen 100% de faltantes, por lo que no podremos hacer nada en el estudio con esas variables. Debido a eso, vamos a borrar las columnas que tienen 100% de faltantes.
+
+```{r}
+df1 <- df[, colSums(is.na(df)) < nrow(df)]
+
+colnames(df1)
+```
+
+Una vez borradas todas las variables inútiles, vamos a seguir estudiandolas. Lo primero que vamos a hacer es verificar el tipo de datos de cada variable, para corregir en caso necesario.
+
+```{r}
+str(df1)
+```
+
+Podemos observar que la mayoría de las variables tienen el tipo de dato correcto, pero hay algunas que no. Por ejemplo, las variables `C8H10`, `C7H8` y `C6H6` deberían ser numéricas, pero están como caracteres. Por lo que vamos a convertirlas a numéricas. Además, la variables `Temp.`, `Veloc.`, `H.Rel.`, `Precip.` y `Veloc.máx.` también deberían ser numéricas, pero están como caracteres. Por lo que vamos a convertirlas a numéricas.
+
+```{r}
+df1$C8H10 <- as.numeric(gsub(",", ".", df1$C8H10))
+
+df1$C7H8 <- as.numeric(gsub(",", ".", df1$C7H8))
+
+df1$C6H6 <- as.numeric(gsub(",", ".", df1$C6H6))
+
+df1$Temp. <- as.numeric(gsub(",", ".", df1$Temp.))
+
+df1$Veloc. <- as.numeric(gsub(",", ".", df1$Veloc.))
+
+df1$H.Rel. <- as.numeric(gsub(".", ".", df1$H.Rel.))
+
+df1$Precip. <- as.numeric(gsub(",", ".", df1$Precip.))
+
+df1$Veloc.máx. <- as.numeric(gsub(",", ".", df1$Veloc.máx.))
+
+df1 <- df1 %>%
+  mutate(
+    # 1) vacíos → NA
+    CO = na_if(CO, ""),
+    # 2) coma decimal → punto
+    CO = str_replace(CO, ",", "."),
+    # 3) carácter → numérico
+    CO = as.numeric(CO)
+  )
+
+str(df1)
+```
+
+Ahora que ya hemos cambiado los tipos de datos de las variables que creeiamos necesario, vamos a ver el porcentaje de valores faltantes de cada variable.
+
+```{r}
+miss_var_summary(df1)
+```
+
+Podemos observar que la variable `H.Rel.` tiene un 100% de faltantes lo cual nos indica que no sirve para nada, asique la borramos.
+
+```{r}
+df1 <- df1 %>% 
+  select(-c('H.Rel.'))
+```
+
+Pese a que de las variables restantes, muchas tienen porcentajes de faltantes bastante elevados, no las vamos a eliminar ya que nos podrían servir en el estudio.
+
+Además, hay variables con nombres que queremos cambiar y también vamos a crear variables nuevas para facilitar su uso en el futuro. Por ejemplo, de la variable `FECHA`vamos a crear las siguientes variables:
+- `Dia`: el día de la fecha.
+- `Mes`: el mes de la fecha.
+- `Año`: el año de la fecha.
+- `Dia_semana`: el día de la semana de la fecha.
+- `Mes_numero`: el mes de la fecha en formato numérico.
+
+De las variables `FECHA` y `HORA` vamos a crear la variable `FechaHora`.
+
+```{r}
+#cambiar nombre de variable FECHA
+colnames(df1)[colnames(df1) == "FECHA"] <- "Fecha"
+# Convertir FECHA a formato Date (asumiendo "dd/mm/yyyy")
+df1$Fecha <- as.Date(df1$Fecha, format = "%Y-%m-%d")
+
+# Extraer día, mes y año
+df1 <- df1 %>%
+  mutate(
+    Dia = ifelse(!is.na(Fecha), day(Fecha), NA),
+    Mes = ifelse(!is.na(Fecha), month(Fecha), NA),
+    Año = ifelse(!is.na(Fecha), year(Fecha), NA),
+    Dia_Semana = ifelse(!is.na(Fecha), weekdays(Fecha), NA)
+  )
+
+#modificamos DIA_SEMANA para que sea categorica y en español
+# Crear un mapeo de días de la semana de inglés a español
+dias_en_ingles <- c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+dias_en_espanol <- c("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+mapa_dias <- setNames(dias_en_espanol, dias_en_ingles)
+df1$Dia_Semana <- mapa_dias[df1$Dia_Semana]
+
+#modificamos la variable mes
+# Crear un vector de mapeo de números a nombres de meses en español
+mapa_meses <- c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
+df1$Mes <- mapa_meses[as.numeric(df1$Mes)]
+
+#crear variable mes_numero
+df1 <- df1 %>%
+  mutate(MES_NUMERO = month(Fecha))
+
+#cambiar nombre del origen
+df1$archivo_origen <- substr(df1$archivo_origen, 10, nchar(df1$archivo_origen) - 4)
+
+#cambiar nombre de variable archivo_origen
+colnames(df1)[colnames(df1) == "archivo_origen"] <- "Origen"
+
+#cambiar nombre de variable HORA
+colnames(df1)[colnames(df1) == "HORA"] <- "Hora"
+
+#cambiar nombre de variable Veloc.
+colnames(df1)[colnames(df1) == "Veloc."] <- "Velocidad"
+
+#cambiar nombre de variable Direc.
+colnames(df1)[colnames(df1) == "Direc."] <- "Direccion_viento"
+
+#cambiar nombre de variable Temp.
+colnames(df1)[colnames(df1) == "Temp."] <- "Temperatura"
+
+#cambiar nombre de variable Pres.
+colnames(df1)[colnames(df1) == "Pres."] <- "Presion"
+
+#cambiar nombre de variable R.Sol.
+colnames(df1)[colnames(df1) == "R.Sol."] <- "Radiacion_solar"
+
+#cambiar nombre de variable Precip.
+colnames(df1)[colnames(df1) == "Precip."] <- "Precipitacion"
+
+#cambiar nombre de variable Veloc.máx.
+colnames(df1)[colnames(df1) == "Veloc.máx."] <- "Velocidad_maxima"
+
+# Creación de la variable FechaHora
+df1 <- df1 %>%
+  mutate(
+    FechaHora = ymd_hms(paste(Fecha, Hora, "00", "00", sep = ":"), tz = "UTC")
+  )
+
+# Filtramos para solo quedarnos con datos de 2019 hasta 2024
+df1<- df1 %>%
+  filter(Año != 2025)
+
+```
+
+```{r}
+colnames(df1)
+```
+
+Ahora que ya hemos hecho los cambios que queríamos, vamos a ver analizar las variables por zona. Primero vamos a mostrar todas las estación de medición.
+
+```{r}
+unique(df1$Origen)
+```
+
+Estás son las 20 estaciones disponibles en la base de datos. Ahora vamos a ver e cuantas estaciones se mide cada variable.
+
+Primero vamos a guardar en una variable todos las variables que se pueden medir. Y luego ejecutamos el codigo proporcionado.
+
+```{r}
+mediciones <- c(
+  "Velocidad", "Direccion_viento", "Temperatura", "Presion",
+  "Radiacion_solar", "Precipitacion", "Velocidad_maxima",
+  "PM2.5", "PM1", "NO", "NO2", "PM10", "NOx",
+  "C8H10", "SO2", "CO", "O3", "C7H8", "C6H6",
+  "Ruido", "NH3"
+)
+
+df1 %>%
+  select(Origen, all_of(mediciones)) %>%       
+  pivot_longer(
+    cols      = all_of(mediciones),            
+    names_to  = "Variable", 
+    values_to = "Valor"
+  ) %>%
+  filter(!is.na(Valor)) %>%                   
+  distinct(Origen, Variable) %>%               
+  count(Variable, name = "Num_estaciones") %>% 
+  # --- 3) Gráfico ---
+  ggplot(aes(x = reorder(Variable, -Num_estaciones), 
+             y = Num_estaciones)) +
+    geom_col(fill = "skyblue", color = "black") +
+    labs(
+      title = "Número de estaciones con datos por variable",
+      x     = "Variable",
+      y     = "Número de estaciones"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+En el hsitograma de arriba podemos observar que los contaminantes `NO`, `NO2` y `NOx` son los que se miden en más  esatciones (20 de 24 estaciones), lo que podría significar que son más importantes.
+
+Ahora vamos a ver que variables mide cada esatción, lo cual nos servirá más adelante para analizar variables individualmente.
+
+```{r}
+df_binaria <- df1 %>%
+  # Seleccionamos solo Origen y los contaminantes de interés
+  select(Origen, all_of(mediciones)) %>%
+  # Pasamos a formato largo para tratar cada par estación–contaminante
+  pivot_longer(cols       = -Origen,
+               names_to   = "Variable",
+               values_to  = "Valor") %>%
+  # Creamos un indicador 1/0 de si hay algún dato no NA
+  mutate(tiene_dato = ifelse(!is.na(Valor), 1, 0)) %>%
+  # Agrupamos para quedarnos con el máximo (si existe al menos un 1)
+  group_by(Origen, Variable) %>%
+  summarise(tiene_dato = max(tiene_dato), .groups = "drop") %>%
+  # Volvemos a formato ancho: cada contaminante en su columna
+  pivot_wider(names_from   = Variable,
+              values_from  = tiene_dato,
+              values_fill  = 0)
+
+# Mostramos la tabla final
+print(df_binaria)
+```
+
+En esta tabla, podemos observar 1 en las variables que se mide en la estación y 0 cuando no se mide. Para que quede un poco más visual vamos a crear una tabla que para cada estación, liste las variables que mide.
+
+```{r}
+resumen_estaciones <- df1 %>%
+  select(Origen, all_of(mediciones)) %>%
+  pivot_longer(
+    cols      = -Origen,
+    names_to  = "Variable",
+    values_to = "Valor"
+  ) %>%
+  filter(!is.na(Valor)) %>%
+  group_by(Origen) %>%
+  summarise(
+    num_var   = n_distinct(Variable),                   
+    lista_var = paste(sort(unique(Variable)), collapse = ", ") 
+  ) %>%
+  ungroup() %>%
+  arrange(desc(num_var)) 
+
+# Mostrar el resultado
+print(resumen_estaciones)
+```
+
+Podemos observar que las estaciones miden entre 5 y 20 varibles. Ahora vamos a hacer lo mismo pero por años, es decir en que años ha medido variables cada estación.
+
+```{r}
+resumen_anios_estaciones <- df1 %>%
+  # Nos quedamos solo con Origen y Año
+  select(Origen, Año) %>%
+  # Eliminamos filas sin Año
+  filter(!is.na(Año)) %>%
+  # Agrupamos por estación
+  group_by(Origen) %>%
+  # Calculamos número de años distintos y lista ordenada
+  summarise(
+    num_anios  = n_distinct(Año),
+    lista_anios = paste(sort(unique(Año)), collapse = ", ")
+  ) %>%
+  ungroup() %>%
+  # Orden descendente por número de años
+  arrange(desc(num_anios))
+
+# Mostrar resultado
+print(resumen_anios_estaciones)
+```
+
+Observamos que la mayoría de las estaciones tienen datos desde 2019 hasta 2024, pero hay otras que no.
+
+Lista de 2019-2024:
+- Paterna - CEAM		
+- Quart de Poblet			
+- Torrent-El Vedat			
+- València - Av. França			
+- València - Bulevard Sud			
+- València - Centre		
+- València - Molí del Sol			
+- València - Pista de Silla			
+- València - Politècnic	
+- València - Vivers
+- València-Conselleria Meteo
+
+Lista de 2020-2024:
+- València - Nazaret Met-2			
+- València Port Moll Trans. Ponent
+
+Lista de 2021-2024:
+- València Port llit antic Túria
+
+Lista de 2022-2024:
+- València Olivereta
+
+Lista de solo 2024:
+- Benetusser UM			
+- Catarroja UM			
+- Massanassa_UM				
+- Paiporta UM			
+- Sedavi UM
+
+Si nos fijamos, las estaciones que solo se miden en 2024 son las zonas afectadas por la DANA, lo cual podría deberse a que implementaron los sensores debido a la DANA. 
+
+Ahora vamos a ver la cantidad de variables que se han medido cada año en cada estación.
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+
+resumen_estac_anio <- df1 %>%
+  # 1) Seleccionamos Origen, Año y las variables de medición
+  select(Origen, Año, all_of(mediciones)) %>%
+  # 2) Quitamos años faltantes
+  filter(!is.na(Año)) %>%
+  # 3) Llevamos todo a formato long
+  pivot_longer(
+    cols      = all_of(mediciones),
+    names_to  = "Variable",
+    values_to = "Valor"
+  ) %>%
+  # 4) Solo valores presentes
+  filter(!is.na(Valor)) %>%
+  # 5) Agrupamos por estación y año
+  group_by(Origen, Año) %>%
+  # 6) Para cada par Origen–Año contamos y listamos las variables medidas
+  summarise(
+    num_var    = n_distinct(Variable),
+    lista_var  = paste(sort(unique(Variable)), collapse = ", "),
+    .groups    = "drop"
+  ) %>%
+  # 7) Ordenamos (opc):
+  arrange(Origen, Año)
+
+# Ver el resultado
+print(resumen_estac_anio)
+
+```
+
+Al analizar esta tabla a mano, vemos que la mayoría de estaciones miden las mismas variables desde 2019 a 2024, pero hay excepciones, como las siguientes:
+
+Torrent-El Vedat:
+- Esta estación media 14 variables en 2019 y 2020, pero de 2021 a 2024 mide 17 variables. Lo cual nos indica que se añadieron sensores.
+
+València - Pista de Silla:
+- En esta estación, de 2019 a 2021 se medían 12 variables, a partir de 2022 se miden 11.
+
+València Port Moll Trans. Ponent:
+- En 2019 no medía ninguna variable, luego pasó a medir 8 en 2020 y a partir de 2021 mide 15 variables.
+
+Vamos a ver más a fondo las variables que se han empezado o dejado de medir en estas estaciones.
+
+#### Torrent-El Vedat
+
+```{r}
+presencia_torrent <- df1 %>%
+  filter(Origen == 'Torrent-El Vedat') %>%
+  select(Año, all_of(mediciones)) %>%
+  pivot_longer(
+    cols      = all_of(mediciones),
+    names_to  = "Variable",
+    values_to = "Valor"
+  ) %>%
+  filter(!is.na(Valor)) %>%
+  distinct(Año, Variable) %>%
+  mutate(presente = TRUE) %>%
+  pivot_wider(
+    names_from   = Año,
+    values_from  = presente,
+    values_fill  = list(presente = FALSE)
+  )
+
+# 3) Mostrar la matriz de presencia/ausencia
+print(presencia_torrent)
+
+# 4) Extraer variables que NO están en todos los años
+vars_incompletas_torrent <- presencia_torrent %>%
+  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
+  pull(Variable)
+
+cat("Variables medidas en algunos años pero no en todos:", 
+    paste(vars_incompletas_torrent, collapse = ", "), "\n")
+```
+
+Se puede observar que en 2019 no se media `CO`, `Presion` y `Radiacion_solar`. En cambio, en 2020, estas variables si se miden y las que no se miden son `C8H10`, `C7H8` y `C6H6`. En el resto de años, 2021-2024, se miden todas, midiendo un total de 17 variables en esos ultimos años.
+
+#### València - Pista de Silla
+
+```{r}
+presencia_silla <- df1 %>%
+  filter(Origen == 'València - Pista de Silla') %>%
+  select(Año, all_of(mediciones)) %>%
+  pivot_longer(
+    cols      = all_of(mediciones),
+    names_to  = "Variable",
+    values_to = "Valor"
+  ) %>%
+  filter(!is.na(Valor)) %>%
+  distinct(Año, Variable) %>%
+  mutate(presente = TRUE) %>%
+  pivot_wider(
+    names_from   = Año,
+    values_from  = presente,
+    values_fill  = list(presente = FALSE)
+  )
+
+# 3) Mostrar la matriz de presencia/ausencia
+print(presencia_silla)
+
+# 4) Extraer variables que NO están en todos los años
+vars_incompletas_silla <- presencia_silla %>%
+  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
+  pull(Variable)
+
+cat("Variables medidas en algunos años pero no en todos:", 
+    paste(vars_incompletas_silla, collapse = ", "), "\n")
+```
+
+En este caso, podemos observar que la variable `Ruido` se midió solo en los años 2019, 2020 y 2021.
+
+#### València Port Moll Trans. Ponent
+
+```{r}
+presencia_port <- df1 %>%
+  filter(Origen == 'València Port Moll Trans. Ponent') %>%
+  select(Año, all_of(mediciones)) %>%
+  pivot_longer(
+    cols      = all_of(mediciones),
+    names_to  = "Variable",
+    values_to = "Valor"
+  ) %>%
+  filter(!is.na(Valor)) %>%
+  distinct(Año, Variable) %>%
+  mutate(presente = TRUE) %>%
+  pivot_wider(
+    names_from   = Año,
+    values_from  = presente,
+    values_fill  = list(presente = FALSE)
+  )
+
+# 3) Mostrar la matriz de presencia/ausencia
+print(presencia_port)
+
+# 4) Extraer variables que NO están en todos los años
+vars_incompletas_port <- presencia_port %>%
+  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
+  pull(Variable)
+
+cat("Variables medidas en algunos años pero no en todos:", 
+    paste(vars_incompletas_port, collapse = ", "), "\n")
+```
+
+En este caso, en 2021 se empezó a medir `Velocidad`, `Direccion_viento`, `Temperatura`, `Presion`, `Radiacion_solar`, `Precipitacion` y `Velocidad_maxima`, por lo que en 2020 no se midieron.
+
+```{r}
+write.csv(df1, file = "../../../data/cleaned/calidad_aire/conjunto_estaciones_limpio.csv", row.names = FALSE)
+```
