@@ -20,7 +20,7 @@ library(stringr)
 
 
 ```{r}
-df <- read.csv("../../../data/raw/calidad_aire/conjunto_estaciones.csv", stringsAsFactors = FALSE)
+df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/data/raw/calidad_aire/Base_Datos_filtradas_desde_2019/conjunto_estaciones.csv", stringsAsFactors = FALSE)
 ```
 
 ### En este estudio vamos a analizar los contaminantes de la base de datos por zonas y años
@@ -93,8 +93,12 @@ miss_var_summary(df1)
 Podemos observar que la variable `H.Rel.` tiene un 100% de faltantes lo cual nos indica que no sirve para nada, asique la borramos.
 
 ```{r}
-df1 <- df1 %>% 
-  select(-c('H.Rel.'))
+df1 <- df1 %>%
+  select(
+    where(~ mean(is.na(.x)) <= 0.9)
+  )
+
+miss_var_summary(df1)
 ```
 
 Pese a que de las variables restantes, muchas tienen porcentajes de faltantes bastante elevados, no las vamos a eliminar ya que nos podrían servir en el estudio.
@@ -200,9 +204,7 @@ Primero vamos a guardar en una variable todos las variables que se pueden medir.
 mediciones <- c(
   "Velocidad", "Direccion_viento", "Temperatura", "Presion",
   "Radiacion_solar", "Precipitacion", "Velocidad_maxima",
-  "PM2.5", "PM1", "NO", "NO2", "PM10", "NOx",
-  "C8H10", "SO2", "CO", "O3", "C7H8", "C6H6",
-  "Ruido", "NH3"
+  "PM2.5", "NO", "NO2", "PM10", "NOx", "SO2", "CO", "O3"
 )
 
 df1 %>%
@@ -338,10 +340,6 @@ Si nos fijamos, las estaciones que solo se miden en 2024 son las zonas afectadas
 Ahora vamos a ver la cantidad de variables que se han medido cada año en cada estación.
 
 ```{r}
-library(dplyr)
-library(tidyr)
-
-
 resumen_estac_anio <- df1 %>%
   # 1) Seleccionamos Origen, Año y las variables de medición
   select(Origen, Año, all_of(mediciones)) %>%
@@ -374,10 +372,7 @@ print(resumen_estac_anio)
 Al analizar esta tabla a mano, vemos que la mayoría de estaciones miden las mismas variables desde 2019 a 2024, pero hay excepciones, como las siguientes:
 
 Torrent-El Vedat:
-- Esta estación media 14 variables en 2019 y 2020, pero de 2021 a 2024 mide 17 variables. Lo cual nos indica que se añadieron sensores.
-
-València - Pista de Silla:
-- En esta estación, de 2019 a 2021 se medían 12 variables, a partir de 2022 se miden 11.
+- Esta estación media 11 variables en 2019, pero de 2020 a 2024 mide 14 variables. Lo cual nos indica que se añadieron sensores.
 
 València Port Moll Trans. Ponent:
 - En 2019 no medía ninguna variable, luego pasó a medir 8 en 2020 y a partir de 2021 mide 15 variables.
@@ -416,41 +411,7 @@ cat("Variables medidas en algunos años pero no en todos:",
     paste(vars_incompletas_torrent, collapse = ", "), "\n")
 ```
 
-Se puede observar que en 2019 no se media `CO`, `Presion` y `Radiacion_solar`. En cambio, en 2020, estas variables si se miden y las que no se miden son `C8H10`, `C7H8` y `C6H6`. En el resto de años, 2021-2024, se miden todas, midiendo un total de 17 variables en esos ultimos años.
-
-#### València - Pista de Silla
-
-```{r}
-presencia_silla <- df1 %>%
-  filter(Origen == 'València - Pista de Silla') %>%
-  select(Año, all_of(mediciones)) %>%
-  pivot_longer(
-    cols      = all_of(mediciones),
-    names_to  = "Variable",
-    values_to = "Valor"
-  ) %>%
-  filter(!is.na(Valor)) %>%
-  distinct(Año, Variable) %>%
-  mutate(presente = TRUE) %>%
-  pivot_wider(
-    names_from   = Año,
-    values_from  = presente,
-    values_fill  = list(presente = FALSE)
-  )
-
-# 3) Mostrar la matriz de presencia/ausencia
-print(presencia_silla)
-
-# 4) Extraer variables que NO están en todos los años
-vars_incompletas_silla <- presencia_silla %>%
-  filter(if_any(-Variable, ~ ! .x)) %>%  # pone TRUE si hay al menos un FALSE en la fila
-  pull(Variable)
-
-cat("Variables medidas en algunos años pero no en todos:", 
-    paste(vars_incompletas_silla, collapse = ", "), "\n")
-```
-
-En este caso, podemos observar que la variable `Ruido` se midió solo en los años 2019, 2020 y 2021.
+Se puede observar que en 2019 no se media `CO`, `Presion` y `Radiacion_solar`. En el resto de años, 2021-2024, se miden todas, midiendo un total de 17 variables en esos ultimos años.
 
 #### València Port Moll Trans. Ponent
 
@@ -487,5 +448,5 @@ cat("Variables medidas en algunos años pero no en todos:",
 En este caso, en 2021 se empezó a medir `Velocidad`, `Direccion_viento`, `Temperatura`, `Presion`, `Radiacion_solar`, `Precipitacion` y `Velocidad_maxima`, por lo que en 2020 no se midieron.
 
 ```{r}
-write.csv(df1, file = "../../../data/cleaned/calidad_aire/conjunto_estaciones_limpio.csv", row.names = FALSE)
+write.csv(df1, file = "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/base_para_obj1.csv", row.names = FALSE)
 ```
