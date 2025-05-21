@@ -1,0 +1,715 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-05-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(naniar)
+library(lubridate)
+library(zoo)
+library(stringr)
+library(emmeans)
+library(forecast)
+library(car)
+library(lmtest)
+library(emmeans)
+library(mice)
+library(FactoMineR)
+library(factoextra)
+library(pcaMethods)
+library(tibble)
+library(cluster)
+```
+
+
+```{r}
+df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/base_para_obj1.csv", stringsAsFactors = FALSE)
+df <- df %>%
+  mutate(FechaHora = ymd_hms(paste(Fecha, Hora, "00", "00", sep = ":"), tz = "UTC"))
+df$Origen <- as.factor(df$Origen)
+```
+
+# Selección de variables
+
+Para este análsis vamos a utilizar las variables de interés que son las siguientes:
+
+- FechaHora 
+- Origen
+- $NO$
+- $NO_2$
+- $NO_x$
+- $O_3$
+- $PM_{10}$
+- $PM_{2.5}$
+- $SO_2$
+
+```{r}
+df <- df %>% 
+  select(FechaHora, Origen, NO, NO2, NOx, O3, PM10, PM2.5, SO2)
+```
+
+# Selección de estaciones
+
+Para seleccionar las estaciones vamos a ver aquellas que tienen todos los contaminantes en común. 
+
+Antes de ello vamos a ver el número de faltantes por contaminante y por estación.
+
+```{r}
+missing_pct <- df %>%
+  pivot_longer(
+    cols      = c(NO2, NO, NOx, PM10, `PM2.5`, SO2, O3),
+    names_to  = "Contaminante",
+    values_to = "Valor"
+  ) %>%
+  group_by(Origen, Contaminante) %>%
+  summarise(
+    Porcentaje_Faltantes = sum(is.na(Valor)) / n() * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(Porcentaje_Faltantes) %>%
+
+print(missing_pct)
+```
+
+```{r}
+miss_var_summary(df)
+```
+
+Vamos a eliminar aquellas estaciones que tengan un 100% de datos faltantes en algún contaminante.
+
+```{r}
+df <- df %>%
+  group_by(Origen) %>%
+  filter(if_all(
+    c(NO2, NO, NOx, PM10, `PM2.5`, SO2, O3),
+    ~ mean(is.na(.)) < 1
+  )) %>%
+  ungroup()
+```
+
+```{r}
+miss_var_summary(df)
+```
+
+Al eliminar esas estaciones la cantidad de faltantes disminuye considerablemente ya que las estacioness restantes miden todas las variables.
+
+Ahora vamos a comprobar que no exista algún año con un 100% de faltantes para alguno de los contaminantes.
+
+```{r}
+missing_pct_year <- df %>%
+  mutate(year = year(FechaHora)) %>%
+  pivot_longer(
+    cols      = c(NO2, NO, NOx, PM10, `PM2.5`, SO2, O3),
+    names_to  = "Contaminante",
+    values_to = "Valor"
+  ) %>%
+  group_by(year, Contaminante) %>%
+  summarise(
+    PctMissing = mean(is.na(Valor)) * 100,
+    .groups    = "drop"
+  )
+
+print(missing_pct_year)
+```
+
+```{r}
+length(datos_limpios$FechaHora)
+```
+
+
+Hay muy poco porcentaje de faltantes en los contaminantes, por lo que no es necesario eliminar ningún año.
+
+## Imputación de los datos
+
+Vamos a crear una función para imputar los datos.
+
+La función imputará los valores faltantes de las variables por la media de los valores de esa variable de la misma estación en los instantes mas cercanos.
+
+```{r}
+imputar_numerico_por_fecha <- function(df, columna) {
+  df <- df %>%
+    arrange(Origen, FechaHora) %>%
+    group_by(Origen) %>%
+    mutate(
+      !!sym(columna) := ifelse(
+        is.na(!!sym(columna)),
+        rowMeans(cbind(
+          zoo::na.locf(!!sym(columna), na.rm = FALSE, fromLast = FALSE),
+          zoo::na.locf(!!sym(columna), na.rm = FALSE, fromLast = TRUE)
+        ), na.rm = TRUE),
+        !!sym(columna)
+      )
+    ) %>%
+    ungroup()
+  return(df)
+}
+```
+
+```{r}
+datos_limpios <- df %>%
+  imputar_numerico_por_fecha("PM10") %>%
+  imputar_numerico_por_fecha("PM2.5") %>%
+  imputar_numerico_por_fecha("NO") %>%
+  imputar_numerico_por_fecha("NO2") %>%
+  imputar_numerico_por_fecha("NOx") %>%
+  imputar_numerico_por_fecha("SO2") %>%
+  imputar_numerico_por_fecha("O3")
+
+```
+
+Una vez imputados, comprobamos que no hay faltantes y que la imputación ha funcionado correctamente.
+
+```{r}
+miss_var_summary(datos_limpios)
+```
+
+Se han imputado correctamente. Guardamos la base de datos.
+
+```{r}
+#write.csv(datos_limpios, "Calidad_Aire_limpio.csv", row.names = FALSE)
+```
+
+Ahora vamos a comprobar si las distribuciones se ven afectadas al hacer la imputación de los datos.
+
+```{r}
+contaminantes <- c("NO2", "NO", "NOx", "PM10", "PM2.5", "SO2", "O3")
+
+# Comprobar la distribución de los contaminantes antes y después de la imputación
+par(mfrow = c(2, 4))
+for (contaminante in contaminantes) {
+  # Histograma antes de la imputación
+  hist(df[[contaminante]], main = paste("Antes de la imputación:", contaminante), xlab = contaminante)
+  
+  # Histograma después de la imputación
+  hist(datos_limpios[[contaminante]], main = paste("Después de la imputación:", contaminante), xlab = contaminante)
+}
+```
+
+```{r}
+# Quitamos la dana para que se vea mejor
+df_sin_DANA <- subset(df, FechaHora < as.POSIXct("2024-11-17 18:00:00"))
+datos_limpios_sin_DANA <- subset(datos_limpios, FechaHora < as.POSIXct("2024-11-17 18:00:00"))
+
+ggplot(df_sin_DANA, aes(x = FechaHora, y = PM10, group = 1)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 year",    
+    date_labels = "%Y"        
+  ) +
+  labs(
+    title = "Evolución temporal de PM10",
+    x     = "Año",
+    y     = expression(PM[10]~"(µg/m"^3*")")
+  ) +
+  theme_minimal()
+
+
+# imputados
+ggplot(datos_limpios_sin_DANA, aes(x = FechaHora, y = PM10, group = 1)) +
+  geom_line(color = "steelblue") +
+  scale_x_datetime(
+    date_breaks = "1 year",    
+    date_labels = "%Y"        
+  ) +
+  labs(
+    title = "Evolución temporal de PM10 con imputados",
+    x     = "Año",
+    y     = expression(PM[10]~"(µg/m"^3*")")
+  ) +
+  theme_minimal()
+
+```
+
+Observamos que no hay casi cambio entre ellos, los cambios son irrelevantes. Vamos a verlo un poco más en detalle, por ejemplo viendo como afecta a la media anual.
+
+
+```{r}
+df_sin_DANA <- df_sin_DANA %>%
+  mutate(
+    hora = hour(FechaHora))
+
+datos_limpios_sin_DANA <- datos_limpios_sin_DANA %>%
+  mutate(
+    hora = hour(FechaHora))
+  
+
+df_hourly <- df_sin_DANA %>%
+  group_by(hora) %>%
+  summarise(media_PM10 = mean(PM10, na.rm = TRUE)) %>%
+  mutate(Hora = as.numeric(as.character(hora))) %>%
+  arrange(Hora)
+
+ggplot(df_hourly, aes(x = hora, y = media_PM10)) +
+  geom_area(fill = "#FF6E6E", alpha = 0.4) +
+  geom_line(color = "#B22222", size = 1.2) +
+  geom_point(color = "#B22222", size = 3) +
+  scale_x_continuous(breaks = 0:23, limits = c(0, 23)) +
+  labs(
+    title    = "Hourly evolution of the average PM10 concentration",
+    subtitle = "Average values from all stations in Valencia",
+    x        = "Hour of the day",
+    y        = "Average of PM10 (µg/m³)",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold", color = "#B22222"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60")
+  )
+
+
+#IMPUTADOS
+df_hourly_limpio <- datos_limpios_sin_DANA %>%
+  group_by(hora) %>%
+  summarise(media_PM10 = mean(PM10, na.rm = TRUE)) %>%
+  mutate(Hora = as.numeric(as.character(hora))) %>%
+  arrange(Hora)
+
+ggplot(df_hourly_limpio, aes(x = hora, y = media_PM10)) +
+  geom_area(fill = "#FF6E6E", alpha = 0.4) +
+  geom_line(color = "#B22222", size = 1.2) +
+  geom_point(color = "#B22222", size = 3) +
+  scale_x_continuous(breaks = 0:23, limits = c(0, 23)) +
+  labs(
+    title    = "Hourly evolution of the average PM10 concentration IMPUTED",
+    subtitle = "Average values from all stations in Valencia",
+    x        = "Hour of the day",
+    y        = "Average of PM10 (µg/m³)",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold", color = "#B22222"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60")
+  )
+
+```
+
+Observamos una muy ligera disminución, pero muy insignificante. Podemos concluir que la imputación ha sido correcta.
+
+# Comportamiento entre contaminantes
+
+Para ver patrones entre contaminantes vamos a realizar, en primer lugar, un PCA. Dado que hemos imputado los faltantes, podemos usar cualquier modelo del PCA.
+
+```{r}
+df_pca_20k <- datos_limpios %>%
+  filter(year(FechaHora) == 2023) %>%
+  sample_n(20000) %>%
+  select(Origen, NO, NO2, NOx, O3, PM10, `PM2.5`, SO2)
+
+res.pca <- PCA(df_pca_20k, 
+               scale.unit = TRUE, 
+               ncp = 10, 
+               graph = FALSE, 
+               quali.sup = 'Origen')
+
+# Visualizar varianza explicada
+fviz_eig(res.pca, addlabels = TRUE) +
+  geom_hline(yintercept = 100 / res.pca$call$ncp, linetype = 2, color = "red")
+eig.val <- get_eigenvalue(res.pca)
+```
+
+Observamos que la CP1 explica un 50.5% de la variabilidad, la CP2 explica un 17.7% y la CP3 un 14.3%. Dado este gráfico podemos tomar 2 o 3 componentes principales. Primero visualizaremos la CP1 y CP2
+
+```{r}
+fviz_pca_biplot(
+  res.pca,
+  axes        = c(1, 2),    
+  habillage   = "Origen",
+  addEllipses = FALSE,
+  repel       = TRUE,
+  label       = "var",
+  invisible   = "ind",       
+  pointsize   = 1.5
+) +
+  labs(
+    title = "PCA Biplot: Dim1 vs Dim2",
+  )
+```
+
+
+Como esperábamos, las variables $PM10$ y $PM2.5$ están fuertemente correlacionadas tanto en la componente 1 como en la 2. Estas dos variables también estan relacionadas con $NO$, $NO2$, y $NOx$ en la dimension 1, y con $SO2$ tambien pero mucho menos significante. 
+
+Explicación para dimensión 1:
+
+- Las variables $PM10$ y $PM2.5$ están fuertemente correlacionadas entre sí.
+- Las $NO$, $NO2$, y $NOx$ tambien estan fuertemente correlacionadas entre sí.
+- La variable $SO2$ no parece verse muy afectada por la componente principal 1.
+- Las variables $PM10$, $PM2.5$, $NO$, $NO2$, $NOx$ y $SO2$ estan correlacionadas pero $SO2$ menos significativamente.
+- La variable $O3$ esta negativamente correlacionada con el resto de variables.
+
+Estas relaciones estan justificadas, ya que tienen fuentes generadoras en común, por ejemplo la combustión en los automoviles. La relación con tráfico, la veremos más adelante.
+
+La relacion de $O3$ esta justificada ya que reacciona con $NO$ en procesos fotoquímicos para generar $NO2$, por lo que cuanto más $NO$ y $NOx$ menos $O3$.
+
+Explicación dimension 2:
+
+- Los contaminantes $O3$ y $SO2$ no se ve casi afectados por esta componente, pero tienen una relación positiva.
+- Las $NO$, $NO2$, y $NOx$ tambien estan fuertemente correlacionadas entre sí.
+- Las variables $PM10$ y $PM2.5$ están fuertemente correlacionadas entre sí.
+- Los contaminantes $PM10$ y $PM2.5$ estan negativamente correlacionados con $NO$, $NO2$, y $NOx$.
+
+En este caso sucede al reves que en la primera componente, lo cual podría deberse a muchos factores como por ejemplo, la meteorología ya que $NO$, $NO2$ y $NOx$ parece ser que se ve afectada por la temperatura segun hemos visto, pero se confirmara más adelante en el estudio con meteorologia.
+
+Además se observa en las siguientes gráficas.
+
+```{r}
+fviz_contrib(
+  res.pca,
+  choice = "var",
+  axes   = 1,
+  top    = 7   
+) +
+  labs(subtitle = "Variables que más explican PC1")
+```
+
+Las variables $NO$, $NO2$, y $NOx$ son las que más contribuyen a la primera componente. Los contaminantes $PM10$ y $PM2.5$ tambien contribuyen pero menos.
+
+```{r}
+fviz_contrib(
+  res.pca,
+  choice = "var",
+  axes   = 2,
+  top    = 7   
+) +
+  labs(subtitle = "Variables que más explican PC2")
+```
+
+En la segunda componente las variables $PM10$ y $OM2.5$ son las que más contribuyen con diferencia.
+
+```{r}
+fviz_contrib(
+  res.pca,
+  choice = "var",
+  axes   = 3,
+  top    = 7   
+) +
+  labs(subtitle = "Variables que más explican PC3")
+```
+
+En la tercera componente la variable $SO2$ es la que más contribuye con mucha diferencia. Vamos a ver el biplot para CP1 y CP3.
+
+```{r}
+fviz_pca_biplot(
+  res.pca,
+  axes        = c(1, 3),    
+  habillage   = "Origen",
+  addEllipses = FALSE,
+  repel       = TRUE,
+  label       = "var",
+  invisible   = "ind",       
+  pointsize   = 1.5
+) +
+  labs(
+    title = "PCA Biplot: Dim1 vs Dim3",
+    subtitle = "Relación de la tercera componente con el principal"
+  )
+```
+
+Como habiamos visto, la variable $SO2$ tiene un loading alto en la dimensión 3, por lo que explica bastante la variailidad en esa componente.
+
+Ahora vamos a añadir los puntos de origen.
+
+```{r}
+fviz_pca_biplot(
+  res.pca,
+  habillage    = "Origen",
+  addEllipses  = FALSE,
+  repel        = FALSE,
+  col.var       = "black",
+  pointsize    = 1.5,
+  label = "var"
+)
+```
+
+Se ve que los puntos están muy concentrados, pero con ligeras diferencias. 
+
+Vamos a hacer ahora el PCA agrupando las estaciones por su localización geográfica.
+
+- Puerto: València - Av. França, València Port llit antic Túria, València Port Moll Trans. Ponent
+
+- Extrarradio: Quart de Poblet, Torrent-El Vedat
+
+- València - Molí del Sol
+
+- València - Pista de Silla
+
+- València - Politècnic
+
+
+```{r}
+df_pca_grp <- datos_limpios %>%
+  filter(year(FechaHora) == 2023) %>%
+  sample_n(20000) %>%
+  mutate(
+    Grupo = case_when(
+      Origen %in% c(
+        "València - Av. França",
+        "València Port llit antic Túria",
+        "València Port Moll Trans. Ponent"
+      ) ~ "Puerto",
+      Origen %in% c("Quart de Poblet", "Torrent-El Vedat") ~ "Extrarradio",
+      Origen == c("València - Molí del Sol", "València - Pista de Silla", "València - Politècnic") ~ "Ciudad",
+      TRUE                                          ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(Grupo)) %>%
+  select(Grupo, NO, NO2, NOx, O3, PM10, `PM2.5`, SO2)
+
+# 2) PCA (Grupo como variable cuali.sup en la primera columna)
+res.pca_grp <- PCA(
+  df_pca_grp,
+  quali.sup   = 1,
+  scale.unit  = TRUE,
+  graph       = FALSE
+)
+
+
+# 4) Biplot PC1 vs PC2 coloreado por Grupo
+fviz_pca_biplot(
+  res.pca_grp,
+  axes        = c(1, 2), 
+  habillage    = "Grupo",
+  addEllipses  = TRUE,
+  ellipse.level = 0.95,
+  col.var       = "black",
+  repel        = TRUE,
+  label        = "var"
+)
+```
+
+Observamos más o menos lo mismo que antes. Las zonas de 'puertos' tienden a irse hacia la parte positiva de la PC1, lo que indica que tienden a generar más $PM10$, $PM2.5$, $NO$, $NO2$, $NOx$ y $SO2$. Las zonas en el extrarradio tienden a generar más $PM10$ y $PM2.5$. Pero en general todos están distribuidos similarmente.
+
+```{r}
+fviz_pca_biplot(
+  res.pca_grp,
+  axes        = c(1, 3), 
+  habillage    = "Grupo",
+  addEllipses  = TRUE,
+  ellipse.level = 0.95,
+  col.var       = "black",
+  repel        = TRUE,
+  label        = "var"
+)
+```
+
+Parece ser que:
+
+- La CP1 explica la combustión de fosiles, como tráfico, puerto,....
+- La CP2 parece explicar algo de meteorología
+- La CP3 no le vemos explicación.
+
+Vamos a validar el modelo.
+
+```{r}
+K <- 3
+
+res.pca <- PCA(df_pca_20k, 
+               scale.unit = TRUE, 
+               graph = FALSE, 
+               ncp = K, 
+               quali.sup = which(names(df_pca_20k) == "Origen"))
+
+misScores = res.pca$ind$coord[,1:K]
+miT2 = colSums(t(misScores**2)/eig.val[1:K,1])
+I = nrow(df_pca_20k)
+F95 = K*(I**2 - 1)/(I*(I - K)) * qf(0.95, K, I-K)
+F99 = K*(I**2 - 1)/(I*(I - K)) * qf(0.99, K, I-K)
+
+plot(1:length(miT2), miT2, type = "p", xlab = "Contaminación", ylab = "T2 Hottelling")
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+
+```
+
+Observamos que la gran mayoría de los puntos se encuentra por debajo de esta línea, lo que indica que esas combinaciones de contaminantes se consideran normales dentro de la variabilidad esperada. En cambio, hay un número razonable de observaciones que superan el umbral: esos valores atípicos señalan episodios extremos o inusuales de contaminación, ya sea por picos puntuales de emisión o por condiciones meteorológicas excepcionales.
+
+```{r}
+idx_max_anomalia <- which.max(miT2)
+
+# Mostrar el valor de T² más alto
+miT2[idx_max_anomalia]
+
+# Mostrar la fila correspondiente en los datos originales
+df[idx_max_anomalia, ]
+```
+
+Observamos que el valor más alto en Quart de Poblet el 3 de Febrero de 2023 a las 8 de la mañana. Esto podría deberse a muchos factores.
+
+# Clustering
+
+Ahora vamos a hacer un clustering.
+
+```{r}
+# 1) Agregar la concentración media de cada contaminante por estación
+df_sta <- datos_limpios %>%
+  group_by(Origen) %>%
+  summarise(across(
+    c(NO, NO2, NOx, O3, PM10, `PM2.5`, SO2),
+    ~ mean(.x, na.rm = TRUE)
+  )) %>%
+  column_to_rownames("Origen")
+
+# 2) Escalar los datos
+df_scaled <- scale(df_sta)
+
+# Convertir matriz a data frame antes de usar sample_n
+vars_sample <- as.data.frame(df_scaled) %>% sample_n(200, replace = TRUE)
+
+# Calcular la matriz de distancias (opcional: usar scale() si hace falta)
+midist <- get_dist(scale(vars_sample), method = "euclidean")
+
+# Visualizar la matriz
+fviz_dist(midist, 
+          show_labels = FALSE,
+          lab_size = 0.3,
+          gradient = list(low = "#440154", mid = "#21908C", high = "#FDE725"))
+```
+
+```{r}
+# 1) Medias de contaminantes por estación
+df_sta <- datos_limpios %>%
+  group_by(Origen) %>%
+  summarise(
+    NO    = mean(NO,    na.rm = TRUE),
+    NO2   = mean(NO2,   na.rm = TRUE),
+    NOx   = mean(NOx,   na.rm = TRUE),
+    O3    = mean(O3,    na.rm = TRUE),
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(`PM2.5`, na.rm = TRUE),
+    SO2   = mean(SO2,   na.rm = TRUE)
+  ) %>%
+  column_to_rownames("Origen")
+
+# 2) Escalado (media=0, sd=1)
+df_scaled <- scale(df_sta)
+
+# 3) Rango de k a probar (n estaciones - 1, o hasta 10)
+n_stations <- nrow(df_scaled)
+max_k      <- min(10, n_stations - 1)
+
+# 4a) Elbow method (WSS)
+fviz_nbclust(
+  df_scaled,
+  FUNcluster = kmeans,
+  method     = "wss",
+  k.max      = max_k,
+  nstart     = 25
+) +
+  labs(subtitle = "Elbow method: within‐cluster sum of squares")
+
+# 4b) Silhouette method
+fviz_nbclust(
+  df_scaled,
+  FUNcluster = kmeans,
+  method     = "silhouette",
+  k.max      = max_k,
+  nstart     = 25
+) +
+  labs(subtitle = "Silhouette method: average silhouette width")
+
+# 5) Clustering jerárquico (distancia Euclídea + Ward)
+dist_mat <- dist(df_scaled, method = "euclidean")
+hc       <- hclust(dist_mat,    method = "ward.D2")
+
+# 6) Elegir k (por ejemplo 3, según los gráficos anteriores)
+k_opt <- 3
+
+# 7) Cortar el árbol y extraer clusters
+station_clusters <- cutree(hc, k = k_opt)
+
+# 8) Data.frame de etiquetas por estación
+station_clusters_df <- data.frame(
+  Origen  = names(station_clusters),
+  cluster = factor(station_clusters)
+)
+
+# 9) Unir etiquetas al dataset original
+datos_clustered <- datos_limpios %>%
+  left_join(station_clusters_df, by = "Origen")
+
+# 10) Dendrograma con cortes marcados
+plot(hc,
+     labels = FALSE,
+     hang   = -1,
+     main   = "Dendrograma: Ward + Euclidiana")
+rect.hclust(hc, k = k_opt, border = 2:(k_opt+1))
+
+pheatmap(
+  as.matrix(dist_mat),
+  clustering_distance_rows   = dist_mat,
+  clustering_distance_cols   = dist_mat,
+  clustering_method          = "ward.D2",
+  cutree_rows                = 3,
+  cutree_cols                = 3,
+  annotation_row = data.frame(cluster = factor(clusters)),
+  annotation_col = data.frame(cluster = factor(clusters)),
+  show_rownames = FALSE,
+  show_colnames = FALSE
+)
+
+# 11) Proyección PCA coloreada por cluster
+fviz_cluster(
+  list(data    = df_scaled,
+       cluster = station_clusters),
+  geom            = "point",
+  ellipse         = TRUE,
+  show.clust.cent = TRUE
+) +
+  labs(title = paste0("PCA de estaciones (k = ", k_opt, ")"))
+
+# 12) Centros de cada cluster en las unidades originales
+centers_unscaled <- df_sta
+centers_unscaled$cluster <- station_clusters[rownames(centers_unscaled)]
+centers_summary <- centers_unscaled %>%
+  as.data.frame() %>%
+  group_by(cluster) %>%
+  summarise(
+    NO    = mean(NO),
+    NO2   = mean(NO2),
+    NOx   = mean(NOx),
+    O3    = mean(O3),
+    PM10  = mean(PM10),
+    PM2.5 = mean(PM2.5),
+    SO2   = mean(SO2)
+  )
+
+print(centers_summary)
+```
+
+Hemos seleccionado 3 clusters ya que creemos que es la mejor combinación, ya que el 3 tiene el coeficiente de silhouette 2º más alto y por el metodo del codo vemos que en el cluster 3/4 se observa la diferencia.
+
+```{r}
+station_clusters_df %>%
+  arrange(cluster) %>%
+  group_by(cluster) %>%
+  summarise(
+    estaciones = paste(Origen, collapse = ", ")
+  )
+
+station_clusters_df
+```
+
+Aqui vemos en que clusters se ha asignado cada estación de medición.
