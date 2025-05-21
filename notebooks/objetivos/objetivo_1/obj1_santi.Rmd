@@ -195,6 +195,54 @@ Vemos que la distribución de PM10 al aplicar la transformación logarítmica es
 
 #### Comportamiento por zonas
 
+Vamos a ver la distribución del contaminante por zonas
+
+```{r}
+df %>%
+  filter(!is.na(PM10)) %>%
+  ggplot(aes(x = PM10)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de PM10 por estación",
+      x     = "PM10 (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+Vemos que en la mayoría de las estaciones la distribución de los calores es muy similar. Resalta un poco más el hecho de que hay algunas con unas colas un poco más alargadas, estas estaciones son las afectadas por la DANA. Lo cual tiene sentido que sus colas sean más largas ya que hubo una temporada con valores extremadamente altos. Vamos a ver la distribucion logaritmica.
+
+```{r}
+df %>%
+  filter(!is.na(log_PM10)) %>%
+  ggplot(aes(x = log_PM10)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de log(PM10) por estación",
+      x     = "log(PM10) (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+En estas distribuciones, parece ser que si existen diferencias significativas en los valores de PM10 dependiendo de la zona de medicion. Esto lo veremos más adelante.
+
 Vamos a ver gráficamente las medias de PM10 para cada estación para asi ver si varia mucho los valores.
 
 ```{r}
@@ -409,7 +457,7 @@ df_pm10 = df_sin_DANA%>%
   sample_n(200)
 df_pm10$log_PM10 = log(df_pm10$PM10)
 
-fit <- aov(log_PM10 ~ Origen, data = df_pm10)
+fit <- aov(PM10 ~ Origen, data = df_pm10)
 summary(fit)
 ```
 
@@ -430,7 +478,7 @@ Ahora vamos a comprobar la homogeniedad.
 leveneTest(fit)
 ```
 
-Como el p-value es muy cercano a 0.05, hay una señal debil de que pudiera existir algo de desigualdad de varianzas. Pero como es mayor que alpha, no podemos rechazar la igualdad de varianzas y por ello cumple la condición de homogeniedad del ANOVA.
+Como el p-value es mayor que alpha, no podemos rechazar la igualdad de varianzas y por ello cumple la condición de homogeniedad del ANOVA.
 
 Vamos a visualizar unos gráficos que demuestren lo indicado.
 
@@ -455,7 +503,9 @@ print(res_ns)
 
 En la tabla solo se muestran las combinaciones que presentan diferencias significativas entre ellas (p-value <= 0.05).
 
-Esto indica que en estas zonas los valores de PM10 se ven afectados por su ubicación, esto podría deberse a muchos factores. Por ejemplo, a la densidad de tráfico en esas zonas, lo cual estudiaremos más adelante.
+Esto es sorprendente, ya que estas zonas no son las que tienen valores más altos ni más bajos, de hecho, en la graficas de media y mediana tienen valores similares.
+
+Esto indica que en estas zonas los valores de PM10 se ven afectados por su ubicación, esto podría deberse a muchos factores. Por ejemplo, a la densidad de tráfico en esas zonas, ya que unas estan más en el centro de la ciudad que otras. O tambien podría deberse a la meteorología, ya que puede variar. Todo esto lo estudiaremos más adelante. 
 
 En resumen, los valores de PM10 no se ven afectados por la zona en la gran mayoría de casos. Por lo que la estación de medición no parece ser muy influyente.
 
@@ -1462,6 +1512,54 @@ Otra vez, tenemos una distribución parecida a la normal, pero con problemas en 
 
 #### Comportamiento por zonas
 
+Vamos a ver la distribución del contaminante por zonas.
+
+```{r}
+df %>%
+  filter(!is.na(PM2.5)) %>%
+  ggplot(aes(x = PM2.5)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de PM2.5 por estación",
+      x     = "PM2.5 (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+Sucede lo mismo que en la variable PM2.5, hay algunas zonas con colas mayores en las estaciones afectadas por la DANA. Vamos a ver la ditribucion logaritmica de PM2.5.
+
+```{r}
+df %>%
+  filter(!is.na(log_PM2.5)) %>%
+  ggplot(aes(x = log_PM2.5)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de log(PM2.5) por estación",
+      x     = "log(PM2.5) (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+Observamos que muchas zonas se siguen distribuyendo igual, con una concentración mayor en valores altos que bajos. Parece ser que en algunos casos la zona si que influye.
+
 Vamos a ver gráficamente las medias de PM2.5 para cada estación para asi ver si varia mucho los valores.
 
 ```{r}
@@ -1690,7 +1788,19 @@ oneway.test(log_PM2.5 ~ Origen, data = df_pm2.5, var.equal = FALSE)
 La hipótesis nula es que todas las medias de log_PM2.5 son iguales independientemente del origen.
 Como el p-value es menor que 0.05, rechazamos la hipotesis nula, y por tanto existe al menos un par de origenes cuyas medias difieren significativamente.
 
-Con esto podemos conclui que, los valores de PM2.5 si que varian dependiendo de su estación de medicion.
+```{r}
+tukey_pm10 <- TukeyHSD(fit_pm2.5)
+
+res <- as.data.frame(tukey_pm2.5$Origen)
+
+res_ns <- subset(res, `p adj` <= 0.05)
+
+print(res_ns)
+```
+
+Esto muestra que tan solo 3 pares de estaciones tienen diferencias significativas entre ellas, todas tienen como factor comun la zona Quart de Poblet. Son las mismas que en PM10.
+
+Con esto podemos concluir que, los valores de PM2.5 no varían dependiendo de la zona, excepto las estaciones que se vieron afectadas por la DANA en 2024.
 
 #### Comportamiento por timepo
 
@@ -2329,6 +2439,54 @@ Dado que el p-value es < 0.05, rechazamos hipotesis nula, y por tanto afirmamos 
 
 #### Comportamiento por zonas
 
+Vamos a ver la distribución del contaminante por zonas
+
+```{r}
+df %>%
+  filter(!is.na(SO2)) %>%
+  ggplot(aes(x = SO2)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de SO2 por estación",
+      x     = "SO2 (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+Observamos que la distribución de los datos en las zonas no varía casi nada, si se observa valore más altos en las estaciones del puerto, posiblemente debido al tráfico portuario. Vamos a hacer lo mismo pero para log(SO2).
+
+```{r}
+df %>%
+  filter(!is.na(log_SO2)) %>%
+  ggplot(aes(x = log_SO2)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de log(SO2) por estación",
+      x     = "log(SO2) (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+En las distribuciones logaritmicas, si que se puede apreciar que existen diferencias significativas en algunas zonas. Esto lo veremos más adelnate.
+
 Vamos a ver gráficamente las medias de SO2 para cada estación para asi ver si varia mucho los valores.
 
 ```{r}
@@ -2509,7 +2667,9 @@ Todas las parejas de estaciones tienen diferencias significativas excepto las si
 - Sedavi UM	y València Port Moll Trans. Ponent
 - València - Bulevard Sud	y València - Pista de Silla
 
-Podemos observar que muchas de las que no tienen diferencias, estan relativamente cerca y por eso pueden tener comportamientos similares.
+Podemos observar que muchas de las que no tienen diferencias, y estuvieron afectadas por la DANA la mayoría. Luego las de los puertos tienen valores parecidos a las zonas afectadas por la DANA, debido a que en los puertos se genera mucho SO2 debido a la combustion de los barcos, camiones,...
+
+Podemos concluir que, la zona si influye en las mediciones de SO2. Más adelante estudiaremos si puede deberse al tráfico o meteorología.
 
 #### Comportamiento por timepo
 
@@ -3190,6 +3350,54 @@ Dado que el p-value es < 0.05, rechazamos hipotesis nula, y por tanto afirmamos 
 
 #### Comportamiento por zonas
 
+Vamos a ver la distribucion de la variable por cada zona.
+
+```{r}
+df %>%
+  filter(!is.na(CO)) %>%
+  ggplot(aes(x = CO)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de CO por estación",
+      x     = "CO (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+Todas las zonas tienen una distribucion similar, solo que algunas tienen valores más altos que cambian un poco la distribucion. Vamos a ver como son las logaritmicas.
+
+```{r}
+df %>%
+  filter(!is.na(log_CO)) %>%
+  ggplot(aes(x = log_CO)) +
+    geom_histogram(bins = 100,
+                   fill = "#6EC6FF",
+                   color = "red",
+                   alpha = 0.7) +
+    facet_wrap(~ Origen, scales = "free_y") +
+    labs(
+      title = "Distribución de log(CO) por estación",
+      x     = "log(CO) (µg/m³)",
+      y     = "Frecuencia"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold"),
+      axis.title = element_text(face = "bold")
+    )
+```
+
+Sucede lo mismo que en CO. Algunas zonas si parecen diferir del resto, esto lo veremos más adelante.
+
 Vamos a ver gráficamente las medias de CO para cada estación para asi ver si varia mucho los valores.
 
 ```{r}
@@ -3400,7 +3608,7 @@ Ahora vamos a realizar el test de Dunn, para realizar las comparaciones por pare
 df %>%
   dunn_test(log_CO ~ Origen, p.adjust.method = "bonferroni")
 ```
-Las estaciones con **** indican que difieren significativamente, las demás no tienen diferencias significativas. Esas estaciones son las siguientes:
+Las estaciones con **** indican que difieren significativamente, las demás no tienen diferencias significativas. Esas estaciones, sin diferencias significativas, son las siguientes:
 
 - Catarroja UM y Massanassa_UM
 - Catarroja UM y Paiporta UM
@@ -3410,7 +3618,9 @@ Las estaciones con **** indican que difieren significativamente, las demás no t
 - Paiporta UM	y Sedavi UM
 - Sedavi UM	y Torrent-El Vedat
 
-Estas estaciones estan todas relativamente cercas unas de otras, y por ejemplo todas sufrieron mucho durante la dana, lo que puede llevar a la conclusión de que se comportan similarmente.
+Estas estaciones estan todas relativamente cercas unas de otras, y por ejemplo todas sufrieron mucho durante la DANA, lo que puede llevar a la conclusión de que se comportan similarmente y que no difieren entre ellas pero si entre las demás.
+
+En conclusión, la zona si que influye  en los valores medidos de CO.
 
 #### Comportamiento por timepo
 
@@ -4041,6 +4251,8 @@ En líneas generales, las variables PM10 y PM2.5 presentan un comportamiento pr�
 Por su parte, SO2 muestra una distribución de valores distinta a la de los partículas, con un perfil unimodal que denota cierta estabilidad en sus concentraciones. Sin embargo, al analizar sus medias por año, mes, día y hora, observamos una evolución paralela a la de PM2.5 y PM10 —aunque menos pronunciada—, lo que indica la presencia de algunas fuentes de emisión comunes.
 
 La variable CO también presenta una distribución unimodal, similar a la de SO2, y su comportamiento temporal se asemeja al del resto de contaminantes por compartir orígenes de generación. Lo más destacable de CO es que su proporción de valores faltantes es casi el doble que en las PM10 y PM2.5, y casi tres veces la de SO2.
+
+Todos los contaminantes se ven afectados por las zonas de medición ya que existen diferencias significativas.
 
 En todos estos contaminantes hay un patrón en los datos ausentes, pues en ocasiones coinciden fechas con faltantes en más de un año.
 
