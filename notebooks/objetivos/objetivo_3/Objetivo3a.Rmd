@@ -1,0 +1,1340 @@
+---
+title: "Analisis_meteorologia"
+output:
+  pdf_document:
+    latex_engine: xelatex
+date: "2025-03-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Descarga de las librerías
+
+```{r meteorologia}
+# Cargar librerías necesarias
+library(dplyr)
+library(ggplot2)
+library(VIM)
+library(stringr)
+library(readr)
+
+```
+
+# Previsualización de los datos
+
+```{r}
+meteorologia_horarias <- read_csv("meteorologia_horarias.csv")
+str(meteorologia_horarias)
+```
+
+Observamos como todos los datos están almacenados en forma de strings, por lo que tenemos que cambiar aquellos que sean representables en numérico a este formato, para así poder representarlos correctamente.
+
+```{r}
+# Cargar librerías necesarias
+library(stringr)
+
+# Cargar dataset (suponiendo que ya está en la variable meteorologia_horaria)
+df <- meteorologia_horarias  # Crear una copia para trabajar
+
+# 1. **Eliminar variables con un único valor constante**
+df <- df[, sapply(df, function(col) length(unique(na.omit(col))) > 1)]
+
+# 2. **Función para limpiar y convertir a numérico si la columna tiene una unidad común**
+convertir_a_numeric <- function(columna, nombre_columna) {
+  valores_unicos <- unique(na.omit(columna))  # Obtener valores únicos no nulos
+  patron <- "[^0-9.,]"  # Patrón para eliminar caracteres no numéricos
+
+  # Reemplazar "," por "." en decimales antes de convertir
+  columna <- gsub(",", ".", columna)
+
+  # Verificar si todos los valores tienen el mismo sufijo (unidad)
+  sufijos <- unique(str_extract(valores_unicos, "[^0-9.,]+$"))  # Extrae los sufijos
+  sufijos <- sufijos[!is.na(sufijos)]  # Eliminar NA en caso de valores sin sufijo
+
+  # Modificar el nombre de la columna si todos los valores tienen el mismo sufijo
+  if (length(sufijos) == 1) {
+    nuevo_nombre <- paste0(nombre_columna, " (", sufijos, ")")
+  } else {
+    nuevo_nombre <- nombre_columna
+  }
+
+  # Convertir a numérico eliminando caracteres no numéricos
+  nueva_columna <- as.numeric(gsub(patron, "", columna))
+  
+  return(list(nueva_columna, nuevo_nombre))
+}
+
+# 3. **Aplicar la conversión a todas las columnas posibles**
+nuevos_datos <- lapply(names(df), function(col) {
+  # Excluir "Tiempo" y "Dirección del viento" porque son texto
+  if (is.character(df[[col]]) & !(col %in% c("Tiempo", "Dirección del viento"))) {  
+    resultado <- convertir_a_numeric(df[[col]], col)
+    return(resultado)
+  } else {
+    return(list(df[[col]], col))  # Mantener variables categóricas sin cambios
+  }
+})
+
+# 4. **Reconstruir el data.frame con nuevos nombres de columnas**
+df <- as.data.frame(lapply(nuevos_datos, `[[`, 1))  # Extraer datos convertidos
+colnames(df) <- sapply(nuevos_datos, `[[`, 2)  # Extraer nombres corregidos
+
+
+```
+
+Con esta función cambiamos todas las variables posibles de string a numérico e integramos elementos que no eran relevantes dentro de las observaciones a los títulos, como por ejemplo "%" o "Km". Además también se eliminan variables que tienen siempre el mismo valor como la probabilidad de nevada
+
+```{r}
+str(df)
+```
+
+De esta forma las variables se quedan todas en el formato correcto
+
+# Estudio de valores faltantes
+
+```{r}
+summary(df)
+```
+
+```{r}
+colSums(is.na(meteorologia_horarias))
+```
+
+Comprobamos de esta forma que no hay valores faltantes a primera vista, pero es necesario estudiar con mayor profundidad este hecho, ya que tal vez en la fuente de datos en vez de dejar celdas vacías se ponen valores predeterminados como 0 cuando no se tiene un valor. Este estudio lo realizaremos dentro del Análisis de Atípicos.
+
+# Estudio de atípicos
+
+## Temperatura
+
+```{r}
+ggplot(df, aes(x = Temperatura)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Temperatura") +
+  xlab("Temperatura") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$Temperatura, main="Boxplot de Temperatura", ylab="Grados Celsius", col="lightblue")
+```
+
+En la variable temperatura observamos en el histograma como se juntan dos poblaciones. Por una parte la poblacion de temperaturas de invierno que presenta una temperatura media alrededor de los 12º y la población de invierno que presenta una temperatura media al rededor de 25 grados. Por otro lado observamos como la temperatura mínima no es un valor atípico ya que 0º es una temperatura que puede llegar a darse en valencia algún año en invierno y observamos también como la temperatura máxima, 45.5º tambíen es algo que puede ocurrir en Valencia los días más calurosos de verano.
+
+
+```{r}
+# Asegúrate de tener ggplot2 instalado
+
+
+# Suponiendo que tu base de datos se llama df
+ggplot(df, aes(x = fecha, y = Temperatura)) +
+  geom_line(color = "steelblue") +
+  labs(title = "Temperatura a lo largo del tiempo",
+       x = "Fecha",
+       y = "Temperatura (°C)") +
+  theme_minimal()
+
+```
+El gráfico muestra una clara estacionalidad, con ciclos anuales donde las temperaturas alcanzan máximos en verano y mínimos en invierno, lo cual es típico de climas templados. Las temperaturas extremas, que superan los 40 °C y bajan cerca de 0 °C, sugieren veranos calurosos e inviernos suaves, posiblemente en una zona mediterránea. Además, se observa alta variabilidad diaria, probablemente debido a mediciones horarias y fenómenos meteorológicos como frentes fríos o cambios bruscos de clima.
+
+## Precipitaciones (mm)
+
+```{r}
+ggplot(df, aes(x = `Precipitaciones ( mm)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Precipitaciones") +
+  xlab("Precipitaciones (mm)") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$`Precipitaciones ( mm)`, main="Boxplot de Precipitaciones", ylab="Milímetros", col="lightgreen")
+```
+
+A partir del boxplot y los histogramas nos damos cuenta de que la mayoría de días las precipitaciones son 0, lo cual tiene sentido ya que la mayoría de días en Valencia no llueve Así mismo detectamos como la precipitación máxima es de 17.5 milímetros, vamos a estudiar si este valor ocurrió realmente, o si es un valor atípico.
+
+```{r}
+# Encontrar la fecha con el máximo de precipitaciones
+max_precipitacion <- df %>% filter(`Precipitaciones ( mm)` == max(`Precipitaciones ( mm)`, na.rm = TRUE))
+
+# Mostrar la fecha con la mayor precipitación
+max_precipitacion$fecha
+```
+
+Tras buscar información en internet encontramos una noticia del País en la que se alerta a la comunidd valenciana de trombas de agua ese mismo día, por lo que interpretaoms que el dato no es atípico y realmente ocurrió.
+
+
+```{r}
+# Suponiendo que tu base de datos se llama df y que ya está cargada
+ggplot(df, aes(x = fecha, y = `Precipitaciones ( mm)`)) +
+  geom_line(color = "deepskyblue3") +
+  labs(title = "Precipitaciones a lo largo del tiempo",
+       x = "Fecha",
+       y = "Precipitaciones (mm)") +
+  theme_minimal()
+```
+
+
+## Humedad (%)
+
+```{r}
+ggplot(df, aes(x = `Humedad (%)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Humedad") +
+  xlab("Humedad (%)") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$`Humedad (%)`, main="Boxplot de Humedad", ylab="Porcentaje", col="lightcoral")
+```
+
+Observamos como la variable humedad presenta unos valores con una distribución que se asemeja a una normal, con unos rangos totalmente posibles y no se detecta ningun valor atípico. Ademas podemos observar un seesgo a la izquierda que nos indica que Valencia es una ciudad Húmeda.
+
+## Velocidad del viento (Km/h)
+
+```{r}
+ggplot(df, aes(x = `Velocidad del viento (Km/h)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Velocidad del Viento") +
+  xlab("Velocidad del viento (Km/h)") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$`Velocidad del viento (Km/h)`, main="Boxplot de Velocidad del Viento", ylab="Km/h", col="lightgoldenrod")
+```
+
+La velocidad del viento muestra una distribución normal asímetrica a la derecha, hay una mayor concentración de datos en los valores más bajos de velocidad del viento (entre 0 y 20 Km/h). Algo que tiene sentido en Valencia. A medida que la velocidad aumenta, la frecuencia disminuye, lo cual también tiene sentido ya que es raro que hayan varios días con muchísimo viento en Valencia.
+
+## Ráfaga de viento (Km/h)
+
+```{r}
+ggplot(df, aes(x = `Ráfaga de viento (Km/h)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Ráfaga de Viento") +
+  xlab("Ráfaga de viento (Km/h)") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$`Ráfaga de viento (Km/h)`, main="Boxplot de Ráfaga de Viento", ylab="Km/h", col="lightpink")
+```
+
+Observamos como las ráfagas de viento tienen una distribución similar a la velocidad del viento, solo que alcanza velocidades mayores. Esto tiene sentido ya que en el ámbito meteorológico es más probable alzanzar velocidades mayores pero durante periodos no sostenidos de tiempo.
+
+## Ángulo del viento (°)
+
+```{r}
+ggplot(df, aes(x = `Ángulo del viento (°)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Ángulo del Viento") +
+  xlab("Ángulo del viento (°)") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$`Ángulo del viento (°)`, main="Boxplot de Ángulo del Viento", ylab="Grados", col="lightgray")
+```
+
+Observamos como la dirección del viento presenta una unión de dos poblaciones por una parte tenemos la población del viento de levante 90º y por otra parte tenemos la población del viento de poniente 270º, que conforman los vientos más comunes de valencia. Por lo que estos datos concuerdan con la realidad y no se observa ningun valor atípico.
+
+## Nubosidad (%)
+
+```{r}
+ggplot(df, aes(x = `Nubosidad (%)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Nubosidad") +
+  xlab("Nubosidad (%)") +
+  ylab("Frecuencia")
+```
+
+```{r}
+boxplot(df$`Nubosidad (%)`, main="Boxplot de Nubosidad", ylab="Porcentaje", col="lightcyan")
+```
+
+Observamos a partir del boxplot y de los histogramas como la nubosidad presenta una distribución uniforme, a excepción de los valores más bajos que presentan una mayor frecuencia. Esto tiene sentido ya que valencia se caracteriza por ser una ciudad principalmente soleada, aunque algunos días llueva, lluvia que se ve reflejado en las nubosidades altas que también aparecen con una mayor frecuencia que el resto pero aún asi significativamente menor que la frecuencia de las nubosidades cercanas a cero.
+
+## Visibilidad (Km)
+
+```{r}
+ggplot(df, aes(x = `Visibilidad ( Km)`)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  theme_minimal() +
+  ggtitle("Distribución de Visibilidad") +
+  xlab("Visibilidad (Km)") +
+  ylab("Frecuencia")
+```
+
+## Visibilidad (Km)
+
+```{r}
+boxplot(df$`Visibilidad ( Km)`, main="Boxplot de Visibilidad", ylab="Kilómetros", col="lavender")
+
+```
+
+La distribución evidencia un marcado predominio de observaciones en torno a los 10 km, con un pico muy elevado en ese punto. La mayoría de los valores se sitúan cerca del máximo, reflejando condiciones generalmente claras. En niveles inferiores, la frecuencia es muy baja, evidenciando episodios puntuales de visibilidad reducida. En conjunto, los datos sugieren que la visibilidad es alta la mayor parte del tiempo algo que concuerda con la realidad de Valencia.
+
+## Tiempo
+
+```{r}
+ggplot(df, aes(x = Tiempo)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribución de Condiciones Climáticas", x = "Condición Climática", y = "Frecuencia") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+Observamos como la variable categórica tiempo contiene información general del tiempo de valencia, lo cual podría servirnos en un futuro si necesitamos simplificar nuestro dataset. Así mismo no observamos ningún valor atípico ni frecuencias raras
+
+## Direccion del viento
+
+```{r}
+ggplot(df, aes(x = `Dirección del viento`)) +
+  geom_bar(fill = "lightcoral", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribución de Dirección del Viento", x = "Dirección del Viento", y = "Frecuencia")
+
+```
+
+Tras estudiar la variable categórica dirección del viento nos damos cuenta que no tiene ninguna frecuencia rara y agrupa las direcciones del viento y en menos valores que la variable dirección del viento en grados, lo cual nos podría servir si para algun modelo queremos simplificar nuestras variables.
+
+#Comparación de la base de datos horaria con la diaria por zonas
+
+##Base de datos horaria
+```{r}
+# Convertir 'hora' en factor
+df$hora <- as.factor(df$hora)
+
+# Lista de variables numéricas, cada nombre entre backticks
+vars_numericas <- c(
+  "`Temperatura`",
+  "`Precipitaciones ( mm)`",
+  "`Humedad (%)`",
+  "`Velocidad del viento (Km/h)`",
+  "`Ráfaga de viento (Km/h)`",
+  "`Ángulo del viento (°)`",
+  "`Nubosidad (%)`",
+  "`Visibilidad ( Km)`"
+)
+
+# Realizar ANOVA para cada variable
+resultados_anova <- lapply(vars_numericas, function(var) {
+  formula <- as.formula(paste(var, "~ hora"))
+  aov_result <- aov(formula, data = df)
+  summary(aov_result)
+})
+
+# Asignar nombres legibles para referencia (sin los backticks)
+names(resultados_anova) <- gsub("`", "", vars_numericas)
+
+# Imprimir resultados
+resultados_anova
+
+
+```
+
+Fijando un nivel de significación de α = 0.05, se concluye que todas las variables analizadas, excepto las precipitaciones, presentan diferencias estadísticamente significativas en su media según la hora del día. En particular, la temperatura, la humedad, la velocidad y ráfaga del viento, el ángulo del viento, la nubosidad y la visibilidad tienen valores p inferiores a 0.05, lo que indica que varían significativamente con la hora. La visibilidad muestra una diferencia leve pero significativa (p = 0.027), mientras que la nubosidad y las demás variables presentan diferencias altamente significativas (p < 0.001). Por otro lado, las precipitaciones no alcanzan el umbral de significación (p = 0.0887), por lo que no se puede afirmar que cambien significativamente a lo largo del día, esto se debe a que en su mayoría las precipitaciones a lo largo de la base de datos son 0, porque valencia es una ciudad en la que no llueve mucho y por tanto no sale como que la hora sea un factor significativo.
+
+
+##Base de datos diaria por zonas
+```{r}
+
+df1 <- read_csv("archivo_salida.csv")
+str(df1)
+```
+
+
+```{r}
+# Asegurarse de que Zona sea un factor
+df1$Zona <- as.factor(df1$Zona)
+
+# Lista de variables numéricas
+vars_numericas <- c("T_min", "T_mit", "T_max", "HR", "Precip", "V_mit", "V_max")
+
+# Ejecutar ANOVA para cada variable con respecto a Zona
+resultados_anova <- lapply(vars_numericas, function(var) {
+  formula <- as.formula(paste(var, "~ Zona"))
+  aov_result <- aov(formula, data = df1)
+  summary(aov_result)
+})
+
+# Asignar nombres legibles a los resultados
+names(resultados_anova) <- vars_numericas
+
+# Imprimir resultados
+resultados_anova
+
+
+```
+Fijando un nivel de significación de α = 0.05, se observa que todas las variables meteorológicas analizadas —salvo las precipitaciones— presentan diferencias estadísticamente significativas en sus medias según la zona geográfica. Variables como la temperatura mínima, media y máxima, la humedad relativa, la velocidad y velocidad máxima del viento muestran valores p inferiores a 0.001, lo que indica una influencia muy significativa del factor zona. En el caso de las precipitaciones, el valor p obtenido (0.00052) se encuentra muy próximo al umbral de significación, lo que sugiere una posible diferencia entre zonas, pero que debe interpretarse con cautela. Es importante señalar que este resultado posiblemente se vea afectado por la inclusión en el análisis de zonas alejadas de Valencia, cuyas condiciones climáticas no son comparables con las del entorno valenciano y que, por tanto, introducen variabilidad que no es representativa ni útil para los objetivos del estudio. Estas zonas distorsionan las estimaciones y enmascaran las diferencias reales entre las áreas de interés en Valencia.
+
+```{r}
+# Asegurarse de que Zona sea factor (por si no se ha hecho)
+df1$Zona <- as.factor(df1$Zona)
+
+# Ajustar el modelo ANOVA para Precip
+modelo_precip <- aov(Precip ~ Zona, data = df1)
+
+# Aplicar el test de Tukey HSD
+tukey_precip <- TukeyHSD(modelo_precip)
+
+# Ver resultados
+print(tukey_precip)
+# Guardar los resultados del test de Tukey en un archivo de texto
+capture.output(print(tukey_precip), file = "tukey_precip_resultados.txt")
+
+# Aumentar margen izquierdo para mostrar bien los nombres
+par(mar = c(5, 15, 4, 2))  # bottom, left, top, right
+
+# Volver a dibujar el gráfico del test de Tukey
+plot(
+  tukey_precip,
+  las = 1,         # texto horizontal
+  cex.axis = 0.7   # tamaño del texto
+)
+
+
+```
+
+
+Valèncial'Olivereta-Cortes de PallásVenta de Gaeta                       -0.68874175 -1.2937472 -0.08373629 0.0097084
+Valèncial'Olivereta-SuecaMuntanyeta dels Sants                           -0.82272360 -1.5872937 -0.05815351 0.0210887
+
+Son las únicas estaciones que capturan informacion sobre precipitaciones significativamente diferentes y ambas se encuentran muy alejadas de valencia capital y por tanto nuestra zona de estudio. Corroborando las intuiciones del output anterior
+```{r}
+png("tukey_precip_zonas.png", width = 2000, height = 3000, res = 300)
+plot(tukey_precip, las = 1, cex.axis = 0.6)
+dev.off()
+```
+
+
+##Conclusión
+
+En conclusión, tras analizar ambas bases de datos —una con información horaria en una única zona y otra con registros diarios distribuidos por múltiples zonas— se observa que en ambos casos las variables meteorológicas presentan diferencias estadísticamente significativas en función del factor considerado (hora o zona). Esto indica que ambas fuentes de datos reflejan una variabilidad relevante y útil para el análisis, por lo que desde el punto de vista estadístico, cualquiera de las dos podría ser válida. Sin embargo, optar por la base horaria resulta más adecuado para los objetivos del estudio, ya que permite trabajar con mayor granularidad temporal, lo cual es esencial para captar fenómenos que varían a lo largo del día. Además, utilizar una sola zona simplifica notablemente el tratamiento de los datos, evitando la necesidad de incorporar y alinear las coordenadas geográficas tanto de las estaciones meteorológicas como de las estaciones de contaminantes. Por tanto, aunque en ambas bases se gana o se pierde algo de información dependiendo del tipo de variabilidad aportada, se decide trabajar con la base horaria por razones de precisión temporal, simplicidad metodológica y adecuación a las necesidades del análisis.
+
+#Estudio de las variables de metorología
+##PCA (sin modificar Ángulo del viento)
+
+```{r}
+library(dplyr)
+library(FactoMineR)
+library(factoextra)
+library(knitr)
+
+str(df)
+```
+
+
+Mostramos los diferentes valores que puede tomar la variable Tiempo
+```{r}
+unique(df$Tiempo)
+```
+
+
+Reducimos el número de valores con las siguiente agrupaciones:
+1. Despejado
+    "Despejado"
+    "Soleado"
+2. Nublado
+    "Cielo cubierto"
+    "Parcialmente nublado"
+    "Nublado"
+    "Neblina"
+3. Lluvia ligera
+    "Ligeras lluvias"
+    "Ligeras precipitaciones"
+    "Llovizna"
+    "Llovizna a intervalos"
+    "Lluvias ligeras a intervalos"
+    "Intervalos de lluvias ligeras con tomenta en la región"
+    "Periodos de lluvia moderada"
+4. Lluvia fuerte
+    "Lluvia moderada"
+    "Lluvia moderada a intervalos"
+    "Lluvias fuertes o moderadas"
+    "Periodos de fuertes lluvias"
+5. Lluvia extrema
+    "Fuertes lluvias"
+    "Lluvias torrenciales"
+    "Lluvias con tormenta fuertes o moderadas en la región"
+    "Cielos tormentosos en las aproximaciones"
+
+```{r}
+
+
+
+# Asegúrate de que df$Tiempo es de tipo character
+df$Tiempo <- as.character(df$Tiempo)
+
+# Crear nueva variable agrupada correctamente
+df$Tiempo_reducido <- case_when(
+  df$Tiempo %in% c("Despejado", "Soleado") ~ "Despejado",
+  df$Tiempo %in% c("Cielo cubierto", "Parcialmente nublado", "Nublado", "Neblina") ~ "Nublado",
+  df$Tiempo %in% c("Ligeras lluvias", "Ligeras precipitaciones", "Llovizna", 
+                   "Llovizna a intervalos", "Lluvias ligeras a intervalos", 
+                   "Intervalos de lluvias ligeras con tomenta en la región",
+                   "Periodos de lluvia moderada") ~ "Lluvia ligera",
+  df$Tiempo %in% c("Lluvia moderada", "Lluvia moderada a intervalos", 
+                   "Lluvias fuertes o moderadas", "Periodos de fuertes lluvias") ~ "Lluvia fuerte",
+  df$Tiempo %in% c("Fuertes lluvias", "Lluvias torrenciales", 
+                   "Lluvias con tormenta fuertes o moderadas en la región",
+                   "Cielos tormentosos en las aproximaciones") ~ "Lluvia extrema",
+  TRUE ~ NA_character_
+)
+
+# Convertir a factor ordenado
+df$Tiempo_reducido <- factor(df$Tiempo_reducido,
+                             levels = c("Despejado", "Nublado", "Lluvia ligera", "Lluvia fuerte", "Lluvia extrema"))
+
+levels(df$Tiempo_reducido)
+
+```
+
+Ya tenemos los indiciduos separados por condiciones de tiempo más generales, por lo que para realizar el PCA eliminaremos la variable tiempo ya que tiempo_reducido será la variable que se usará en "habillage". Tambíen eliminaremos la variable dirección del viento, ya que tenemos otra variable que la mide de forma más precisa "Dirección del viento en Grados" y eliminamos fecha y hora también de la base de datos del PCA.
+
+
+```{r}
+df_pca <- df[, !(names(df) %in% c("Tiempo", "Dirección del viento", "fecha","hora"))]
+df_pca$Tiempo_reducido <- df$Tiempo_reducido
+str(df_pca)
+```
+
+
+
+```{r}
+
+
+
+
+# Identificar la posición de 'Tiempo'
+pos_tiempo <- which(names(df_pca) == "Tiempo_reducido")
+
+# Ejecutar PCA correctamente, indicando que 'Tiempo' es cualitativa suplementaria
+res.pca <- PCA(df_pca, 
+               scale.unit = TRUE, 
+               ncp = 10, 
+               graph = FALSE, 
+               quali.sup = pos_tiempo)
+
+# Visualizar varianza explicada
+fviz_eig(res.pca, addlabels = TRUE) +
+  geom_hline(yintercept = 100 / res.pca$call$ncp, linetype = 2, color = "red")
+eig.val <- get_eigenvalue(res.pca)
+
+
+```
+
+```{r}
+kable(eig.val[1:8,])
+```
+Teniendo en cuenta que el modelo partía de 8 dimensiones, consideramos 3 un buen número de componentes ya que de esta forma se explicaría el 69% de la variabilidad total de la base de datos.
+
+
+```{r}
+# Número de componentes principales
+K <- 3
+
+
+
+# Ejecutar PCA con Tiempo como variable cualitativa suplementaria
+res.pca <- PCA(df_pca, 
+               scale.unit = TRUE, 
+               graph = FALSE, 
+               ncp = K, 
+               quali.sup = which(names(df_pca) == "Tiempo_reducido"))
+
+# Gráfico T2 Hotelling
+misScores = res.pca$ind$coord[,1:K]
+miT2 = colSums(t(misScores**2)/eig.val[1:K,1])
+I = nrow(df_pca)
+F95 = K*(I**2 - 1)/(I*(I - K)) * qf(0.95, K, I-K)
+F99 = K*(I**2 - 1)/(I*(I - K)) * qf(0.99, K, I-K)
+
+plot(1:length(miT2), miT2, type = "p", xlab = "Meteorología", ylab = "T2")
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+
+```
+A simple vista, el gráfico muestra que al considerar 4 componentes principales, una gran cantidad de individuos superan los umbrales del 95% y 99% según el estadístico T² de Hotelling. Aunque esto podría parecer preocupante en un primer análisis, en realidad no lo es. Esto se debe a que el conjunto de datos contiene aproximadamente 45,000 observaciones, lo que hace prácticamente imposible capturar toda la variabilidad de un conjunto tan grande con solo cuatro componentes principales. Por ello, la presencia de numerosos puntos por encima de los límites estadísticos es un comportamiento esperable en este contexto.
+
+
+
+```{r}
+
+df %>%
+  filter(miT2 > F99) %>%
+  sample_n(10)
+```
+
+
+
+```{r}
+idx_max_anomalia <- which.max(miT2)
+
+# Mostrar el valor de T² más alto
+miT2[idx_max_anomalia]
+
+# Mostrar la fila correspondiente en los datos originales
+df[idx_max_anomalia, ]
+
+```
+Se corresponde con los valores anómalos mencionados anteriormente. En este caso es la fuerte tromba de agua que cayó en Valencia el 12 de junio de 2024 (https://www.levante-emv.com/comunitat-valenciana/2024/06/12/lluvia-valencia-agua-granizo-sequia-cultivos-trenes-desvio-103700817.html).
+
+###Estudio de la 1ª y 2ª componente
+```{r}
+
+fviz_pca_var(res.pca, 
+             col.var = "cos2",           # Colorear por calidad de representación
+             gradient.cols = c("lightblue", "blue", "darkblue"),
+             repel = TRUE,               # Evita superposición de etiquetas
+             title = "Cargas de las variables (PCA)")
+
+
+```
+
+Observamos que las variables relacionadas con el viento —"Velocidad del viento (Km/h)" y "Ráfaga de viento (Km/h)"— están muy próximas entre sí y apuntan en la misma dirección, lo cual indica una alta correlación positiva entre ellas y una fuerte contribución a la primera dimensión (Dim1), que explica el mayor porcentaje de variabilidad. Por otro lado, "Precipitaciones (mm)", "Nubosidad (%)" y "Humedad (%)" aparecen agrupadas y dirigidas hacia el cuadrante superior izquierdo, lo que sugiere que estas variables están positivamente correlacionadas entre sí y asociadas a la segunda dimensión (Dim2). En contraste, variables como "Visibilidad (Km)" y "Temperatura" se sitúan en la parte inferior derecha, en dirección opuesta a las anteriores, indicando que a mayor visibilidad o temperatura, suele haber menos nubosidad, humedad y precipitaciones. Finalmente, variables como el "Ángulo del viento (°)" tienen una representación muy baja en este plano, evidenciada por la corta longitud de su flecha y el color claro, lo que implica que su variabilidad no se explica bien con los dos primeros componentes principales y probablemente influya en dimensiones posteriores del análisis. 
+
+
+```{r}
+
+
+# Seleccionar 100 individuos al azar
+set.seed(123)
+ind_sel <- sample(1:nrow(df_pca), 100)
+
+# Biplot con colores más contrastantes para habillage
+fviz_pca_biplot(res.pca,
+                select.ind = list(name = ind_sel),
+                habillage = df_pca$Tiempo_reducido,
+                addEllipses = FALSE,
+                palette = "Dark2",         # Paleta fuerte y contrastada
+                col.var = "black",
+                label = "var",
+                repel = TRUE,
+                title = "Biplot PCA - 100 individuos aleatorios por Tiempo reducido")
+
+
+
+
+```
+Observamos que los puntos con color verde (Despejado) tienden a ubicarse hacia la parte inferior derecha del gráfico, lo cual está relacionado con valores más altos de temperatura y visibilidad, y menores de humedad o nubosidad. Por el contrario, los puntos asociados a lluvia fuerte o extrema (colores púrpura y verde claro) aparecen más dispersos hacia la parte superior izquierda, asociados a valores altos de humedad y precipitación. Esto refleja coherencia con las variables meteorológicas.
+
+```{r}
+
+
+# Seleccionar 250 individuos al azar
+set.seed(123)
+ind_sel <- sample(1:nrow(df_pca), 100)
+
+# Gráfico de solo individuos en el plano PCA
+fviz_pca_ind(res.pca,
+             select.ind = list(name = ind_sel),
+             habillage = df_pca$Tiempo_reducido,
+             addEllipses = TRUE,
+             palette = "Dark2",
+             pointsize = 2,
+             label = "none",             # No mostrar etiquetas
+             title = "PCA - 100 individuos aleatorios por Tiempo reducido")
+
+```
+Observamos que los puntos con color verde (Despejado) tienden a concentrarse en la parte inferior derecha del gráfico, lo cual está relacionado con valores más altos de temperatura y visibilidad, y más bajos de humedad, nubosidad y precipitación. En contraste, los puntos correspondientes a condiciones de Lluvia ligera y Lluvia fuerte (representados en colores púrpura y rosa) se agrupan más hacia la parte superior izquierda del plano, lo que indica asociación con altos niveles de humedad y mayor nubosidad. La categoría Lluvia extrema (verde claro) aparece con muy pocos puntos, lo cual impide trazar una elipse representativa, pero su ubicación también se alinea con valores elevados en variables como precipitaciones. 
+
+###Estudio de la 1ª y 3ª componente
+
+```{r}
+fviz_pca_var(res.pca, 
+             axes = c(1, 3),                      # Primera y tercera componente
+             col.var = "cos2",                    # Colorear por calidad de representación
+             gradient.cols = c("lightblue", "blue", "darkblue"),
+             repel = TRUE,                        # Evita superposición
+             title = "Cargas de las variables (Dim1 vs Dim3)")
+
+```
+
+Cada flecha representa una variable meteorológica y su dirección y longitud indican cuánto contribuye y cómo se relaciona con estas componentes. Vemos que las variables "Velocidad del viento (Km/h)" y "Ráfaga de viento (Km/h)" están fuertemente proyectadas sobre Dim1, lo cual indica que esta componente está fuertemente asociada con la intensidad del viento. Por otro lado, "Ángulo del viento (°)" está fuertemente alineado con Dim3, lo que sugiere que esta tercera dimensión está explicando información relacionada con la orientación del viento, no capturada por las dos primeras componentes.
+La variable "Temperatura" también presenta una contribución notable a Dim3, apuntando en sentido contrario a "Angulo del viento (º)", lo que implica una correlación negativa entre ambas en este plano (aunque está interpretación tampoco se ha de tener muy en cuenta ya que el ángulo del viento es una variable circular). Las variables "Precipitaciones (mm)", "Nubosidad (%)" y "Visibilidad (Km)" se encuentran muy próximas al origen y en tonos más claros, lo que indica que su representación en este plano es pobre (cos² bajo), es decir, su variabilidad no se explica bien por estas dos dimensiones.
+En resumen, este gráfico sugiere que la componente 1 representa principalmente la intensidad del viento, mientras que la componente 3 recoge aspectos relacionados con la orientación del viento y la temperatura, aportando así una perspectiva complementaria a la interpretación del PCA más allá del plano típico Dim1-Dim2.
+
+
+Lo primero que llama la atención es que los individuos están más dispersos en este plano, lo cual indica que hay mayor variabilidad explicada por estas componentes en relación a las condiciones meteorológicas representadas por las observaciones seleccionadas.
+En cuanto a la distribución por condiciones climáticas, se observa que los individuos clasificados como "Lluvia fuerte" y "Lluvia extrema" (colores rosa y verde claro) se agrupan mayoritariamente en la parte inferior izquierda del gráfico. Esta zona coincide con la dirección de las variables "Precipitaciones (mm)", "Nubosidad (%)" y "Humedad (%)", lo que sugiere que estas condiciones meteorológicas intensas están asociadas a altos valores de esas variables. Es decir, estas componentes capturan muy bien los episodios más húmedos y con mayor nubosidad.
+Por el contrario, en el cuadrante opuesto —superior derecho— se alinean variables como "Ráfaga de viento", "Velocidad del viento", "Visibilidad" y "Ángulo del viento". Esta dirección está mayoritariamente ocupada por individuos con condiciones despejadas o nubladas sin precipitación, lo que refleja una relación negativa entre la visibilidad y las precipitaciones, nubosidad y humedad.
+Finalmente, es interesante notar que la variable "Temperatura" se alinea con la dirección contraria a los episodios lluviosos(aunque con poca fuerza).
+
+
+
+```{r}
+# Seleccionar 100 individuos al azar
+set.seed(123)
+ind_sel <- sample(1:nrow(df_pca), 100)
+
+# Gráfico de solo individuos en Dim1 vs Dim3
+fviz_pca_ind(res.pca,
+             axes = c(1, 3),                           # Primera y tercera componente
+             select.ind = list(name = ind_sel),
+             habillage = df_pca$Tiempo_reducido,
+             addEllipses = TRUE,
+             palette = "Dark2",
+             pointsize = 2,
+             label = "none",                          # No mostrar etiquetas
+             title = "PCA - 100 individuos aleatorios (Dim1 vs Dim3) por Tiempo reducido")
+
+```
+ A diferencia de otros planos, en este espacio se observa que los individuos aparecen más mezclados entre categorías, lo que sugiere que la Dim3 no separa tan claramente los distintos tipos de tiempo como lo hacen la 1ª y la 2ª componente. Aunque algunos grupos muestran cierta agrupación (por ejemplo, Despejado y Nublado tienden a concentrarse hacia el centro-derecha), hay una gran superposición de puntos, especialmente entre las categorías de lluvia ligera y fuerte.
+Sin embargo, es interesante notar que los puntos correspondientes a “Lluvia fuerte” y “Lluvia extrema” se concentran mayormente en la parte inferior izquierda del gráfico, lo cual coincide con la dirección de variables como precipitaciones, nubosidad y humedad, según lo observado en los gráficos de cargas. Por el contrario, las categorías Despejado y Nublado se encuentran más asociadas a la dirección opuesta, relacionada con mayor visibilidad, mayor temperatura y vientos más intensos, como se espera en condiciones más estables y secas.
+
+###Conclusión
+En particular, las primeras componentes del PCA capturan patrones coherentes con el comportamiento esperado de las variables climáticas: por ejemplo, se observa una clara separación entre situaciones secas y soleadas —asociadas a mayor visibilidad, temperatura y viento— y condiciones húmedas o lluviosas —relacionadas con altos niveles de nubosidad, precipitaciones y humedad—. Esta diferenciación es especialmente visible en planos como Dim1 vs Dim2, mientras que en otros, como Dim1 vs Dim3, los grupos aparecen más mezclados, lo que sugiere que no todos los pares de componentes discriminan con la misma eficacia entre los distintos tipos de tiempo.
+Sin embargo, al clasificar los individuos según el factor Tiempo_reducido —una variable categórica que agrupa el estado del tiempo en cinco clases: Despejado, Nublado, Lluvia ligera, Lluvia fuerte y Lluvia extrema— se evidencian ciertas limitaciones. Esta clasificación, aunque útil, no consigue capturar toda la riqueza y variabilidad de las condiciones atmosféricas. Existen situaciones concretas, como días fríos y secos, episodios de viento fuerte sin precipitación, o jornadas excepcionalmente calurosas pero con cielo despejado, que no se ajustan del todo a las categorías predefinidas. Como consecuencia, la agrupación por Tiempo_reducido no refleja completamente la estructura latente que el PCA desvela, lo que sugiere que sería conveniente considerar clasificaciones más específicas o basadas en variables cuantitativas.
+Además, este análisis presenta una limitación técnica importante relacionada con la inclusión de la variable "Dirección del viento (°)", que, al ser una variable circular, no es apropiadamente representada en el espacio lineal del PCA. Valores como 0° y 360°, que indican la misma dirección, son tratados como extremos opuestos, lo que puede distorsionar los resultados. Esta limitación no se aborda en el presente análisis, pero sí se corrige en el PCA posterior, donde se aplica una transformación adecuada que permite integrar correctamente la dirección del viento en el modelo.
+
+
+##PCA (modificando el ángulo de viento)
+
+
+```{r}
+# Cargar librerías
+library(dplyr)
+library(FactoMineR)
+library(factoextra)
+```
+
+
+
+En este análisis resolvemos el problema de tratar una variable circular, como el ángulo del viento, utilizando una transformación trigonométrica que la convierte en dos variables cartesianas: wind_x = cos(ángulo) y wind_y = sin(ángulo). Esta transformación es necesaria porque los ángulos en grados no son lineales: por ejemplo, 0° y 360° representan la misma dirección (norte), pero numéricamente están muy alejados. Si se utiliza el ángulo directamente en métodos como PCA o clustering, que se basan en distancias y combinaciones lineales, se distorsiona la verdadera relación entre direcciones. Al proyectar cada ángulo sobre el círculo unitario mediante el coseno y el seno, obtenemos dos variables numéricas que reflejan correctamente la orientación del viento en el espacio. De este modo, el análisis estadístico trata el ángulo del viento de forma coherente, respetando su naturaleza circular y mejorando la calidad e interpretación de los resultados.
+```{r}
+# Transformar ángulo del viento a coordenadas cartesianas
+df <- df %>%
+  mutate(
+    wind_x = cos(`Ángulo del viento (°)` * pi / 180),
+    wind_y = sin(`Ángulo del viento (°)` * pi / 180)
+  )
+
+```
+
+
+```{r}
+# Preparar base para PCA
+df_pca <- df %>%
+  select(-c("Tiempo", "Dirección del viento", "fecha", "hora", `Ángulo del viento (°)`)) %>%
+  mutate(Tiempo_reducido = factor(Tiempo_reducido))
+
+```
+
+
+
+
+```{r}
+# Posición de variable cualitativa
+pos_tiempo <- which(names(df_pca) == "Tiempo_reducido")
+# Ejecutar PCA con 10 componentes
+res.pca <- PCA(df_pca,
+               scale.unit = TRUE,
+               ncp = 10,
+               graph = FALSE,
+               quali.sup = pos_tiempo)
+
+# Visualización de la varianza explicada
+fviz_eig(res.pca, addlabels = TRUE) +
+  geom_hline(yintercept = 100 / res.pca$call$ncp, linetype = 2, color = "red")
+
+```
+
+```{r}
+# Tabla de varianza explicada
+eig.val <- get_eigenvalue(res.pca)
+knitr::kable(eig.val[1:8,])
+
+```
+
+Tanto el diagrama del codo como la tabla de varianza explicada justifican de forma clara la elección de tres componentes principales para el análisis. En el gráfico, se observa que la “curva del codo” presenta una inflexión notable tras la tercera dimensión: a partir de la cuarta componente, la ganancia en varianza explicada disminuye significativamente. Esto sugiere que añadir más componentes aporta poca información adicional relevante.
+La tabla refuerza esta conclusión: las tres primeras dimensiones explican juntas aproximadamente el 64.0% de la varianza total del conjunto de datos (25.2% + 21.6% + 17.2%). Este valor es suficientemente alto para captar la estructura esencial de los datos sin necesidad de incorporar dimensiones adicionales que solo añadirían complejidad. Por ello, se considera adecuado continuar el análisis con solo tres componentes, ya que representan un equilibrio entre simplificación y capacidad explicativa.£
+
+
+```{r}
+# Definir K (número de componentes a conservar)
+K <- 3
+# Repetir PCA con K componentes
+res.pca <- PCA(df_pca,
+               scale.unit = TRUE,
+               graph = FALSE,
+               ncp = K,
+               quali.sup = pos_tiempo)
+
+
+# Gráfico T² de Hotelling
+misScores <- res.pca$ind$coord[, 1:K]
+miT2 <- colSums(t(misScores^2) / eig.val[1:K, 1])
+I <- nrow(df_pca)
+F95 <- K * (I^2 - 1) / (I * (I - K)) * qf(0.95, K, I - K)
+F99 <- K * (I^2 - 1) / (I * (I - K)) * qf(0.99, K, I - K)
+
+plot(1:length(miT2), miT2, type = "p", xlab = "Observación", ylab = "T² de Hotelling")
+abline(h = F95, col = "orange", lty = 2, lwd = 2)
+abline(h = F99, col = "red3", lty = 2, lwd = 2)
+
+```
+
+Al observar la gráfica, vemos que muchas observaciones superan los umbrales del 95% (línea naranja discontinua), lo que indica que se alejan del centro de la nube multivariada más de lo que sería esperable por azar. Aunque esto podría parecer alarmante, es un resultado esperado y coherente dadas las dimensiones del conjunto de datos (tal como hemos dicho antes): al contar con más de 45,000 individuos, es normal que exista una proporción considerable que se sitúe fuera de los límites estadísticos en un modelo reducido a solo tres componentes. Por tanto, la aparición de estos valores no representa necesariamente ruido o error, sino más bien evidencia de la riqueza estructural y diversidad climática contenida en el conjunto de datos.
+
+```{r}
+# Mostrar observación más anómala
+idx_max <- which.max(miT2)
+df[idx_max, ]
+
+```
+Observamos como el valor atípico más extremo coincide con el del anterior PCA, por lo que se trata de la tromba de agua que cayó en Valencia el 2024-06-12.
+
+
+
+###Estudio de la 1ª y 2ª componente
+
+```{r}
+# Cargas Dim1 vs Dim2
+fviz_pca_var(res.pca,
+             col.var = "cos2",
+             gradient.cols = c("lightblue", "blue", "darkblue"),
+
+             repel = TRUE,
+             title = "Cargas de las variables (Dim1 vs Dim2)")
+
+```
+Como ya se observó en el PCA anterior, las variables "Velocidad del viento (Km/h)" y "Ráfaga de viento (Km/h)" siguen proyectándose fuertemente sobre la primera dimensión (Dim1), lo que indica que esta componente representa fundamentalmente la intensidad del viento. En cambio, variables como "Precipitaciones (mm)", "Nubosidad (%)" y "Humedad (%)" apuntan en una dirección opuesta (cuadrante superior izquierdo), asociándose claramente a la segunda componente (Dim2), que parece capturar la presencia de condiciones atmosféricas húmedas.
+La "Temperatura" y la "Visibilidad (Km)" están bien representadas en este plano y apuntan hacia el cuadrante inferior derecho, en dirección opuesta a las variables de humedad y precipitación. Esto indica que estas variables están negativamente correlacionadas con las condiciones húmedas y se asocian a situaciones más despejadas o estables, lo cual es coherente con el comportamiento meteorológico esperado.
+Finalmente, los vectores wind_x y wind_y, derivados del ángulo del viento, aparecen próximos al origen y en colores claros, lo que indica que su contribución en este plano es baja. Aunque el tratamiento trigonométrico ha resuelto correctamente el problema de circularidad, la información sobre la dirección del viento probablemente esté contenida en la Dim3
+
+
+```{r}
+# Biplot con 100 individuos aleatorios (Dim1 vs Dim2)
+set.seed(123)
+ind_sel <- sample(1:nrow(df_pca), 100)
+
+fviz_pca_biplot(res.pca,
+                select.ind = list(name = ind_sel),
+                habillage = df_pca$Tiempo_reducido,
+                addEllipses = FALSE,
+                palette = "Dark2",
+                col.var = "black",
+                label = "var",
+                repel = TRUE,
+                title = "Biplot PCA - 100 individuos aleatorios (Dim1 vs Dim2)")
+
+```
+En este biplot del PCA proyectado en el plano Dim1–Dim2, tras haber sustituido la variable circular del ángulo del viento por sus componentes cartesianas wind_x y wind_y, se mantiene en gran parte la estructura interpretativa observada en el análisis anterior. Los puntos correspondientes a la categoría Despejado (en verde) se agrupan mayoritariamente hacia la parte inferior derecha, en la dirección de las variables Temperatura y Visibilidad, lo que sugiere que estas observaciones están asociadas a condiciones de mayor estabilidad atmosférica, cielos despejados y buena visibilidad.
+Por otro lado, los puntos correspondientes a las condiciones de Lluvia fuerte y Lluvia extrema (en rosa y verde claro) se ubican principalmente en el cuadrante superior izquierdo, alineados con las variables Precipitaciones (mm), Humedad (%) y Nubosidad (%), lo cual es coherente con su naturaleza: representan situaciones meteorológicas caracterizadas por altos niveles de humedad, nubosidad y acumulación de lluvia.
+La variable wind_x, al igual que wind_y, tiene poca influencia en este plano (indicada por la corta longitud de las flechas), lo que confirma que la información relacionada con la orientación del viento está capturada en dimensiones posteriores. 
+
+
+```{r}
+# Gráfico de solo individuos con elipses (Dim1 vs Dim3)
+fviz_pca_ind(res.pca,
+             select.ind = list(name = ind_sel),
+             habillage = df_pca$Tiempo_reducido,
+             addEllipses = TRUE,
+             palette = "Dark2",
+             pointsize = 2,
+             label = "none",
+             title = "PCA - 100 individuos aleatorios (Dim1 vs Dim2) por Tiempo reducido")
+```
+Este gráfico muestra el resultado del PCA proyectado en el plano de las dos primeras componentes principales (Dim1 y Dim2), tras la transformación del ángulo del viento en variables cartesianas (wind_x y wind_y). Al igual que en el análisis anterior, se observa que los individuos clasificados como Despejado (color verde) tienden a ubicarse en la zona inferior derecha del gráfico, lo cual es coherente con condiciones de mayor temperatura y visibilidad, y menores niveles de humedad, nubosidad y precipitación.
+Por el contrario, los puntos correspondientes a Lluvia ligera y Lluvia fuerte (representados en púrpura y rosa) se concentran en la zona superior izquierda, lo que indica una fuerte asociación con condiciones atmosféricas húmedas y nubosas. Esta distribución es consistente con lo que se esperaba a partir de las cargas de las variables: Dim1 está ligada a la intensidad del viento y condiciones secas, mientras que Dim2 recoge fenómenos vinculados con humedad y precipitación.
+La categoría Lluvia extrema (verde claro) contiene muy pocos individuos, razón por la cual no se ha podido trazar una elipse para este grupo. Sin embargo, los pocos puntos que la representan también se encuentran en la región superior izquierda, alineados con los valores altos de precipitación y humedad, lo que refuerza su coherencia con las condiciones meteorológicas extremas.
+
+
+
+###Estudio de la 1ª y 3ª componente
+```{r}
+# Cargas Dim1 vs Dim3
+fviz_pca_var(res.pca,
+             axes = c(1, 3),
+             col.var = "cos2",
+             gradient.cols = c("lightblue", "blue", "darkblue"),
+             repel = TRUE,
+             title = "Cargas de las variables (Dim1 vs Dim3)")
+
+
+```
+Este gráfico muestra las cargas de las variables meteorológicas en el plano formado por las componentes principales 1 (Dim1) y 3 (Dim3) tras haber transformado el ángulo del viento en sus componentes cartesianas wind_x y wind_y. A diferencia del PCA anterior, donde el ángulo circular resultaba mal representado, esta transformación permite interpretar las direcciones (sur–norte y oeste–este) directamente en el espacio lineal del análisis.
+En este nuevo PCA, la flecha wind_y apunta nítidamente hacia arriba, lo que significa que los valores altos de la tercera componente corresponden a vientos que soplan hacia el oeste (viento de levante), característico por su humedad y nubosidad; de hecho, en esa zona del gráfico aparecen muy cerca las variables Humedad (%) y Nubosidad (%). Por el contrario, los valores bajos de Dim3 indican vientos que soplan hacia el este (viento de poniente), secos y cálidos, en consonancia con las mayores visibilidades.
+La flecha wind_x, que codifica la componente sur–norte del viento, se orienta hacia abajo y a la izquierda, de modo que los valores negativos de la primera componente señalan vientos que soplan hacia el sur (viento de norte), mientras que los valores positivos indican vientos que soplan hacia el norte (viento de sur). Esta distinción norte–sur se refleja también en la temperatura, proyectada en el lado positivo de Dim1 junto a los vientos de sur, lo que confirma que éstos elevan las temperaturas, mientras que los vientos de norte aportan aire más fresco. Por otro lado la componente wind_y, nos indica si el viento va hacia el este o hacia el oeste, en este caso cuando el viento va hacia el oeste le va asociada una mayor temperatura, algo que no concuerda con la literatura, ya que de normal, el viento de poniente, el que se dirige hacia el este, suele ser mas caluroso. De forma que comprobaremos porque sucede esto, viendo si se trata de que en invierno los vientos mas habituales son los de poniente y  por eso el clustering lo trata como si fuera un viento frio
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(lubridate)
+
+# Asegúrate de que df tiene fecha y wind_x, wind_y
+# Definimos temporada: Verano = junio, julio, agosto; Invierno = diciembre, enero, febrero
+df_seasons <- df %>%
+  mutate(
+    mes = month(fecha),
+    temporada = case_when(
+      mes %in% c(6, 7, 8)  ~ "Verano",
+      mes %in% c(12, 1, 2) ~ "Invierno",
+      TRUE                 ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(temporada))
+
+# Calculamos media de wind_x y wind_y por temporada
+resumen_wind <- df_seasons %>%
+  group_by(temporada) %>%
+  summarise(
+    mean_wind_x = mean(wind_x, na.rm = TRUE),
+    mean_wind_y = mean(wind_y, na.rm = TRUE)
+  )
+
+print(resumen_wind)
+
+```
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(gridExtra)
+
+# 1) Preparar datos con la temporada
+df_seasons <- df %>%
+  mutate(
+    mes = month(fecha),
+    temporada = case_when(
+      mes %in% c(6, 7, 8)  ~ "Verano",
+      mes %in% c(12, 1, 2) ~ "Invierno",
+      TRUE                 ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(temporada))
+
+# 2) Boxplots de wind_x y wind_y por temporada
+p1 <- ggplot(df_seasons, aes(x = temporada, y = wind_x, fill = temporada)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Distribución de wind_x por temporada",
+       x = "Temporada", y = expression(wind[x])) +
+  theme(legend.position = "none")
+
+p2 <- ggplot(df_seasons, aes(x = temporada, y = wind_y, fill = temporada)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Distribución de wind_y por temporada",
+       x = "Temporada", y = expression(wind[y])) +
+  theme(legend.position = "none")
+
+# 3) Densidad de wind_x y wind_y por temporada
+p3 <- ggplot(df_seasons, aes(x = wind_x, color = temporada, fill = temporada)) +
+  geom_density(alpha = 0.3) +
+  theme_minimal() +
+  labs(title = "Densidad de wind_x por temporada",
+       x = expression(wind[x]), y = "Densidad")
+
+p4 <- ggplot(df_seasons, aes(x = wind_y, color = temporada, fill = temporada)) +
+  geom_density(alpha = 0.3) +
+  theme_minimal() +
+  labs(title = "Densidad de wind_y por temporada",
+       x = expression(wind[y]), y = "Densidad")
+
+# 4) Mostrar los cuatro gráficos juntos
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+```
+En el panel de densidades de wind_y vemos que en invierno (curva roja) existe un pico muy pronunciado en valores cercanos a –1, mientras que en verano (curva azul) el mayor grueso de la masa está alrededor de +1. Dado que hemos definido que wind_y = +1 corresponde a vientos que soplan hacia el oeste (es decir, viento de levante, procedente del este) y wind_y = –1 a vientos que soplan hacia el este (viento de poniente, procedente del oeste), esto nos dice dos cosas:
+En los meses fríos predomina claramente el poniente; casi todas las observaciones de invierno tienen wind_y negativo, lo que significa que sopla mayoritariamente viento desde el oeste. Ese viento de poniente invernal trae aire continental más frío, por lo que en nuestro PCA quedó asociado a temperaturas bajas, a pesar de que en otras estaciones del año el poniente suele ser cálido y seco.
+Por el contrario, en verano la mayoría de las observaciones aparecen con wind_y positivo, es decir, sopla levante. El levante estival aporta humedad y aire cálido del Mediterráneo, y por eso en el gráfico de variables aparece muy cerca de las flechas de humedad y nubosidad.
+En resumen, lo que está ocurriendo es un claro efecto estacional: el poniente domina en invierno y el levante en verano, y como nuestro PCA no separó explícitamente las estaciones, ese patrón de seasonality se refleja en las cargas de wind_y, vinculando cada dirección de viento a su clima típico en cada época del año.
+
+```{r}
+# Seleccionar 100 individuos al azar
+set.seed(123)
+ind_sel <- sample(1:nrow(df_pca), 100)
+
+# Biplot en Dim2 vs Dim4 con colores por Tiempo_reducido
+fviz_pca_biplot(res.pca,
+                axes = c(1, 3),                           
+                select.ind = list(name = ind_sel),
+                habillage = df_pca$Tiempo_reducido,
+                addEllipses = FALSE,
+                palette = "Dark2",
+                col.var = "black",
+                label = "var",
+                repel = TRUE,
+                title = "Biplot PCA - Dim1 vs Dim3 (100 individuos aleatorios por Tiempo reducido)")
+
+
+```
+
+
+
+
+
+
+```{r}
+# Seleccionar 100 individuos al azar
+set.seed(123)
+ind_sel <- sample(1:nrow(df_pca), 100)
+
+# Biplot en Dim2 vs Dim4 con colores por Tiempo_reducido
+fviz_pca_biplot(res.pca,
+                axes = c(1, 3),                           
+                select.ind = list(name = ind_sel),
+                habillage = df_pca$Tiempo_reducido,
+                addEllipses = FALSE,
+                palette = "Dark2",
+                col.var = "black",
+                label = "var",
+                repel = TRUE,
+                title = "Biplot PCA - Dim1 vs Dim3 (100 individuos aleatorios por Tiempo reducido)")
+
+
+```
+
+```{r}
+# Biplot con 100 individuos aleatorios (Dim1 vs Dim3)
+fviz_pca_biplot(res.pca,
+                axes = c(1, 3),
+                select.ind = list(name = ind_sel),
+                habillage = df_pca$Tiempo_reducido,
+                addEllipses = FALSE,
+                palette = "Dark2",
+                col.var = "black",
+                label = "var",
+                repel = TRUE,
+                title = "Biplot PCA - 100 individuos aleatorios (Dim1 vs Dim3)")
+
+```
+
+A nivel de distribución de grupos, no se observan separaciones nítidas: las categorías Despejado, Nublado y Lluvia ligera se solapan notablemente. Esto confirma que Dim3 no contribuye significativamente a la discriminación entre las clases de tiempo reducido, aunque sí aporta información valiosa sobre la interacción entre temperatura y orientación del viento.
+En resumen, este gráfico complementa la interpretación del PCA mostrando que aunque Dim1 sigue explicando bien la intensidad del viento y condiciones térmicas, Dim3 permite capturar mejor la influencia direccional del viento. No obstante, la mezcla entre individuos sugiere que estas dimensiones no son las más eficaces para clasificar observaciones según categorías climáticas generales, pero sí para explorar matices meteorológicos más específicos.
+
+
+
+
+
+```{r}
+# Gráfico de solo individuos con elipses (Dim1 vs Dim3)
+fviz_pca_ind(res.pca,
+             axes = c(1, 3),
+             select.ind = list(name = ind_sel),
+             habillage = df_pca$Tiempo_reducido,
+             addEllipses = TRUE,
+             palette = "Dark2",
+             pointsize = 2,
+             label = "none",
+             title = "PCA - 100 individuos aleatorios (Dim1 vs Dim3) por Tiempo reducido")
+
+```
+
+Como se comentó anteriormente, en la tercera dimensión los individuos tienden a solaparse en mayor medida, algo que se aprecia claramente en este gráfico.
+
+
+###Conclusión
+
+La realización de un nuevo PCA incorporando la transformación del ángulo del viento mediante sus componentes cartesianas (wind_x y wind_y) ha supuesto una mejora significativa tanto en la calidad técnica del análisis como en su interpretabilidad climática. En el PCA anterior, la variable “Ángulo del viento (°)” era tratada de forma lineal a pesar de su naturaleza circular, lo que provocaba una representación inadecuada de la dirección del viento en los planos principales. Esta limitación ha sido solventada mediante el uso de funciones trigonométricas (cos y sin), que proyectan el ángulo sobre el círculo unitario y permiten captar correctamente la orientación del viento en dos ejes perpendiculares.
+Gracias a esta mejora, el nuevo PCA no solo mantiene la estructura general observada en el análisis anterior —donde las dos primeras componentes separaban con claridad situaciones despejadas de condiciones lluviosas—, sino que además enriquece la interpretación meteorológica. La primera componente (Dim1) sigue reflejando sobre todo la intensidad del viento y las condiciones térmicas, distinguiendo vientos procedentes del sur (wind_x positivo, soplando hacia el sur y asociados a aire más fresco) de los del norte (wind_x negativo, soplando hacia el norte y ligados a temperaturas más elevadas). La segunda componente (Dim2) agrupa claramente humedad, nubosidad y precipitación frente a visibilidad y temperatura.
+Lo más novedoso aparece en la tercera componente (Dim3), que ahora recoge información direccional pura. wind_y positivo (viento soplando hacia el oeste, es decir, levante) se proyecta junto a Humedad (%) y Nubosidad (%), confirmando que el levante aporta aire húmedo y nublado; por el contrario, wind_y negativo (viento soplando hacia el este, es decir, poniente) aparece junto a Visibilidad (Km) pero no junto a Temperatura. Esto sucede porque los episodios de poniente en el conjunto anual se concentran principalmente en invierno, cuando ese viento continental trae aire seco y más frío; al mezclar todas las estaciones en un único PCA, su asociación térmica queda dominada por esa señal invernal y se atenúa su vínculo con el calor. De este modo, el PCA transformado distingue de forma coherente las cuatro orientaciones principales —sur, norte, poniente y levante— y permite interpretar con precisión su influencia específica en el clima de Valencia, mejorando sustancialmente la comprensión local de cada componente.
+
+##Clustering
+
+###Clustering Jerárquico
+
+```{r}
+library(knitr)
+library(cluster)
+library(FactoMineR)
+library(factoextra)
+library(NbClust)
+library(clValid)
+library(grid)
+library(gridExtra)
+library(dplyr)
+
+str(df)
+```
+
+```{r}
+vars_clust <- df %>%
+  select(`Temperatura`,
+         `Precipitaciones ( mm)`,
+         `Humedad (%)`,
+         `Velocidad del viento (Km/h)`,
+         `Ráfaga de viento (Km/h)`,
+         `Nubosidad (%)`,
+         `Visibilidad ( Km)`,
+         wind_x,
+         wind_y)
+# Eliminar NA por seguridad
+vars_clust_clean <- na.omit(vars_clust)
+
+```
+
+
+
+
+
+
+
+
+```{r}
+# Centrado y escalado
+vars_clust_scaled <- scale(vars_clust_clean)
+
+# Convertir matriz a data frame antes de usar sample_n
+vars_sample <- as.data.frame(vars_clust_scaled) %>% sample_n(200)
+
+# Calcular la matriz de distancias (opcional: usar scale() si hace falta)
+midist <- get_dist(scale(vars_sample), method = "euclidean")
+
+# Visualizar la matriz
+fviz_dist(midist, 
+          show_labels = FALSE,
+          lab_size = 0.3,
+          gradient = list(low = "#440154", mid = "#21908C", high = "#FDE725"))
+
+```
+
+```{r}
+# Suponemos que ya tienes vars_clust_scaled como un data.frame escalado
+set.seed(100)
+
+
+vars_clust_scaled_df <- as.data.frame(vars_clust_scaled)
+vars_clust_scaled_mini <- vars_clust_scaled_df %>% sample_n(1000)#3000
+```
+
+
+```{r}
+myN <- c(20, 35, 50, 65)  # Tamaños de muestra aleatorios
+myhopkins <- NULL
+myseed <- sample(1:1000, 10)  # Semillas distintas para repetición
+for (i in myN) {
+  for (j in myseed) {
+    tmp <- get_clust_tendency(data = vars_clust_scaled_mini, n = i, graph = FALSE, seed = j)
+    myhopkins <- c(myhopkins, tmp$hopkins_stat)
+  }
+}
+
+# Mostrar resumen del estadístico de Hopkins
+summary(myhopkins)
+
+```
+
+
+
+```{r}
+vars_clust_scaled_mini <- vars_clust_scaled_df %>% sample_n(6000)
+p1 = fviz_nbclust(x = vars_clust_scaled_mini, FUNcluster = hcut, method = "silhouette", 
+                  hc_method = "ward.D2", k.max = 10, verbose = FALSE, 
+                  hc_metric = "euclidean") + labs(title = "Num. optimo clusters")
+p2 = fviz_nbclust(x = vars_clust_scaled_mini, FUNcluster = hcut, method = "wss", 
+                  hc_method = "ward.D2", k.max = 10, verbose = FALSE, 
+                  hc_metric = "euclidean") + labs(title = "Num. optimo clusters")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+```{r}
+
+set.seed(100)
+df_mini <- df %>%                                   # <- 25 000 filas
+  sample_n(25000)
+
+vars_for_clustering <- df_mini %>%                  # mismas 9 numéricas
+  select(`Temperatura`,
+         `Precipitaciones ( mm)`, `Humedad (%)`,
+         `Velocidad del viento (Km/h)`,
+         `Ráfaga de viento (Km/h)`,
+         `Nubosidad (%)`, `Visibilidad ( Km)`,
+         wind_x, wind_y)
+
+## IMPORTANTE: asignar rownames antes de escalar
+rownames(vars_for_clustering) <- seq_len(nrow(vars_for_clustering))
+
+vars_scaled <- scale(vars_for_clustering)           # matriz 25 000 × 9
+
+## ------------------------------------------------------------------
+## 2) Clustering jerárquico (ward + Euclídea) con las MISMAS filas
+## ------------------------------------------------------------------
+midist  <- dist(vars_scaled, method = "euclidean")
+clust1  <- fastcluster::hclust(midist, method = "ward.D2")
+grupos1 <- factor(cutree(clust1, k = 5))            # vector de 25 000
+df_clustered <- df_mini %>%
+  mutate(cluster = factor(grupos1))
+table(grupos1)
+
+```
+
+El cluster 3 es el más numeroso, con 8.848 observaciones, lo que representa aproximadamente el 35% del total de la muestra analizada. En cambio, el cluster 5 es el más pequeño, con solo 406 individuos, lo que equivale a alrededor del 1,6% de la muestra. Este último podría estar capturando un grupo muy específico o extremo de condiciones meteorológicas, dada su baja representatividad frente al resto. Esta diferencia de tamaño entre clusters sugiere que existen patrones climáticos mayoritarios y otros mucho más puntuales en el conjunto de datos.
+
+####Interpretación
+```{r}
+
+library(dplyr)
+library(lubridate)
+
+# 1. Calcular medias numéricas por cluster
+medias_numericas <- df_clustered %>%
+  select(-hora, -Tiempo_reducido) %>%
+  group_by(cluster) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE))
+
+# 2. Obtener mes más frecuente
+mes_mas_frecuente <- df_clustered %>%
+  mutate(mes = month(fecha, label = TRUE, abbr = FALSE)) %>%
+  group_by(cluster) %>%
+  summarise(mes_mas_comun = names(sort(table(mes), decreasing = TRUE))[1])
+
+# 3. Tiempo más frecuente
+tiempo_mas_frecuente <- df_clustered %>%
+  group_by(cluster) %>%
+  summarise(tiempo_mas_comun = names(sort(table(Tiempo), decreasing = TRUE))[1])
+
+# 4. Tiempo_reducido más frecuente
+tiempo_reducido_mas_frecuente <- df_clustered %>%
+  group_by(cluster) %>%
+  summarise(tiempo_reducido_mas_comun = names(sort(table(Tiempo_reducido), decreasing = TRUE))[1])
+
+# 5. Unir todo
+resumen_cluster <- medias_numericas %>%
+  left_join(mes_mas_frecuente, by = "cluster") %>%
+  left_join(tiempo_mas_frecuente, by = "cluster") %>%
+  left_join(tiempo_reducido_mas_frecuente, by = "cluster")
+
+# 6. Mostrar resultado
+print(resumen_cluster)
+
+
+
+
+```
+Cluster 1
+Corresponde sobre todo a días de enero con predominio de “Soleado”. La temperatura media (≈ 19 °C) es templada, las precipitaciones prácticamente nulas y la humedad baja (≈ 42 %). Los vientos son fuertes (≈ 25 km/h, rachas ≈ 35 km/h) con ángulo medio ≈ 278° (viento de poniente–oeste/noroeste), lo que encaja con una visibilidad casi máxima (≈ 9.99 km) y nubosidad muy reducida (≈ 19 %). Son jornadas claras y ventosas, típicas de anticiclón invernal.
+Cluster 2
+Agrega días de julio igualmente “Soleado”, pero con temperatura más alta (≈ 24 °C) y humedad moderada (≈ 55 %). El viento es más suave (≈ 12 km/h, rachas ≈ 15 km/h) y viene de ≈ 108° (ESE), típico de brisa de componente este en verano. Las precipitaciones son insignificantes y la nubosidad escasa (≈ 13 %), con visibilidad casi perfecta (≈ 9.99 km). Refleja el clásico verano mediterráneo con brisa marina.
+Cluster 3
+Reúne noches y días de enero con tiempo “Despejado” y temperaturas más frías (≈ 14.5 °C), baja precipitación y humedad algo mayor (≈ 64 %). El viento es ligero (≈ 8.5 km/h, rachas ≈ 15.8 km/h) y sopla desde ≈ 283° (NW), lo cual coincide con nubosidad reducida (≈ 19 %) y máxima visibilidad (≈ 9.99 km). Son episodios calmados, fríos y muy claros, propios de tardes invernales sin nubes.
+Cluster 4
+Aglutina registros de marzo con estado “Parcialmente nublado”, temperatura intermedia (≈ 16.5 °C) y humedad elevada (≈ 74 %). Aparecen lluvias ligeras ocasionales (≈ 0.09 mm), nubosidad alta (≈ 62 %) y visibilidad algo menor (≈ 9.85 km). El viento moderado (≈ 9.3 km/h, rachas ≈ 13.8 km/h) proviene de ≈ 159° (SSE), transportando aire algo más húmedo en la transición a primavera.
+Cluster 5
+Incluye también días de marzo, pero con lluvia persistente (“Llovizna”), temperaturas más bajas (≈ 13.3 °C) y humedad muy alta (≈ 83 %). Las precipitaciones medio-diarias superan 1 mm, la nubosidad se dispara (≈ 90 %) y la visibilidad cae a ≈ 5.3 km. El viento es moderado-fuerte (≈ 13.6 km/h, rachas ≈ 20.5 km/h) desde ≈ 160° (SSE), asociándose a episodios de lluvia ligera continuada y cielos encapotados.
+En conjunto, los clusters distinguen claramente dos tipos de invernales (clusters 1 y 3: claros y ventosos vs. fríos y suaves), un veraniego puro (cluster 2), y dos primaverales (cluster 4 de transición parcialmente nublado y cluster 5 de llovizna).
+
+
+####Interpretación PCA 1ª y 2ª Componente
+```{r}
+
+miPCA <- PCA(vars_scaled, scale.unit = FALSE, graph = FALSE)
+fviz_pca_var(miPCA)
+```
+```{r}
+library(factoextra)
+library(gridExtra)
+
+## 1. Sacamos 200 índices al azar
+set.seed(100)
+ids_200 <- sample(seq_len(nrow(miPCA$ind$coord)), 400)
+
+## 2. Convertimos esos índices al nombre de fila que busca fviz_pca_ind()
+ids_200_chr <- rownames(miPCA$ind$coord)[ ids_200 ]
+
+## 3. Dibujamos solo esos 200 puntos
+colores <- "Dark2"
+fviz_pca_ind(
+  miPCA,
+  geom        = "point",
+  habillage   = grupos1,              # factor con 25000 niveles
+  addEllipses = TRUE,
+  palette     = colores,
+  select.ind  = list(name = ids_200_chr)  # <<< sólo estos 200
+)
+
+```
+Grupo 1 (verde azulado): Aparece hacia la derecha del gráfico, en dirección a variables como temperatura, visibilidad y velocidad del viento. Esto concuerda con las estadísticas del cluster 1, que lo asocian a días fríos pero despejados de invierno, con viento de poniente (dirección oeste). Su baja humedad (≈42 %) y alta visibilidad refuerzan la idea de condiciones secas y soleadas, típicas de enero.
+Grupo 2 (naranja): Se encuentra hacia el centro-derecha del plano, en una región menos extrema, pero aún alineada con temperatura y visibilidad. Esto se ajusta a su caracterización previa como el grupo más cálido (≈24 °C), típico del verano, con brisa marina del sureste. Es un cluster de condiciones cálidas y estables, mayoritariamente observado en julio y con tiempo soleado.
+Grupo 3 (azul): Está centrado en la nube principal de puntos, lo que visualmente indica condiciones moderadas. Numéricamente, también representa un patrón común, con temperatura más baja (≈14.5 °C), humedad algo más alta (≈64 %) y viento del oeste, propio de días fríos pero estables. Es el grupo más numeroso, lo que coincide con su posición central, representando la situación más frecuente en el conjunto de datos.
+Grupo 4 (rosa): Se agrupa hacia la parte superior del gráfico, en dirección a las variables de nubosidad y precipitación. En el análisis descriptivo, este grupo presentaba temperaturas moderadas (≈16.5 °C), elevada nubosidad (≈62 %) y precipitaciones significativas, lo cual es coherente con situaciones húmedas de transición, típicamente observadas en marzo con tiempo parcialmente nublado.
+Grupo 5 (verde claro): Muy separado del resto, en la parte superior izquierda del plano PCA. Su ubicación coincide con altos valores de humedad, nubosidad y precipitación, reflejando un patrón claramente extremo. Esto encaja perfectamente con el perfil del cluster 5, que recogía los días más adversos (lluvia intensa, visibilidad baja, cielo cubierto). Aunque pequeño en tamaño, este grupo es muy característico y su clara diferenciación en el plano confirma su singularidad meteorológica.
+
+
+```{r}
+
+# PC1 vs PC2 con TODOS los individuos
+fviz_pca_ind(
+  miPCA,
+  geom        = "point",
+  habillage   = grupos1,       # factor con 25 000 niveles
+  addEllipses = TRUE,
+  palette     = colores
+)
+```
+Con este gráfico se corroboran los resultados anteriores pero con un mayor número muestral n=25000
+
+####Interpretación PCA 1ª y 3ª Componente
+```{r}
+fviz_pca_var(miPCA, axes=c(1,3))
+```
+
+
+```{r}
+
+
+## 3. Dibujamos solo esos 200 puntos
+colores <- "Dark2"
+fviz_pca_ind(
+  miPCA,
+  axes        = c(1,3),
+  geom        = "point",
+  habillage   = grupos1,              # factor con 25000 niveles
+  addEllipses = TRUE,
+  palette     = colores,
+  select.ind  = list(name = ids_200_chr)  # <<< sólo estos 200
+)
+```
+En el plano Dim1–Dim3, la posición de cada cluster se interpreta a partir de las direcciones y longitudes de los vectores de carga:
+Cluster 1 (círculos verdes, abajo a la derecha)
+Se sitúa en la zona de Dim1 elevada y Dim3 negativa. Alto Dim1 significa viento intenso (Velocidad y Ráfaga), buena Visibilidad y Temperaturas relativamente altas. Dim3 negativa implica wind_y < 0, es decir, viento de poniente (se dirige hacia el este), característico por ser seco. En conjunto, Cluster 1 agrupa días muy ventosos, despejados y calurosos, con un poniente seco y limpio.
+Cluster 2 (triángulos naranjas, arriba a la derecha)
+Queda en Dim1 alta pero Dim3 positiva. Combina igualmente viento moderado–fuerte y buena visibilidad con wind_y > 0, es decir, levante (viento de componente este soplando hacia el oeste), que arrastra humedad y nubosidad. Corresponde a veranos con brisa de levante: calor moderado, algo de nubosidad y humedad.
+Cluster 3 (cuadrados morados, abajo a la izquierda)
+Aparece con Dim1 baja y Dim3 negativa. Baja intensidad de viento, visibilidad más reducida y temperaturas frescas, junto al poniente suave (wind_y < 0). Son horas frías, muy claras y con viento ligero de poniente, típicas de noches o mañanas invernales estables.
+Cluster 4 (cruces rosas, centro–arriba)
+Ocupa valores medios de Dim1 y Dim3 positiva. Viento moderado pero menos intenso que en Clusters 1 y 2, visibilidad intermedia, Temperaturas templadas, y levante (wind_y > 0) que aporta algo de nubosidad y humedad. Refleja condiciones de transición (parcialmente nublado) sin precipitaciones intensas.
+Cluster 5 (cuadrados verde claro, arriba a la izquierda)
+Se extiende hacia Dim1 baja y Dim3 muy positiva, junto a Precipitaciones y Humedad altas. Corresponde a episodios de llovizna y nubosidad densa con viento de levante húmedo, baja visibilidad y temperaturas frescas.
+En resumen, las cinco nubes de puntos quedan perfectamente delimitadas por la combinación de intensidad térmica–ventosa (Dim1) y orientación Este–Oeste (Dim3) que los vectores wind_x/wind_y introducen en el PCA.
+
+```{r}
+# PC1 vs PC2 con TODOS los individuos
+fviz_pca_ind(
+  miPCA,
+  axes        = c(1,3),
+  geom        = "point",
+  habillage   = grupos1,       # factor con 25 000 niveles
+  addEllipses = TRUE,
+  palette     = colores
+)
+```
+Con este gráfico se corroboran los resultados anteriores pero con un mayor número muestral n=25000
+
+####Conclusión
+
+El análisis de clustering aplicado a los datos meteorológicos ha permitido identificar cinco grupos bien diferenciados de condiciones atmosféricas, cada uno caracterizado por combinaciones particulares de temperatura, humedad, precipitación, viento, nubosidad y visibilidad. Estos clusters no solo reflejan distintos tipos de tiempo (como días soleados, nublados o lluviosos), sino que también muestran patrones estacionales coherentes, como la distinción entre días invernales fríos y secos, o situaciones típicas del verano con altas temperaturas y baja nubosidad.
+Uno de los aspectos más destacables del análisis es la capacidad del clustering para detectar eventos meteorológicos extremos, aunque poco frecuentes, como el representado por el grupo 5, claramente separado del resto y asociado a episodios de lluvia intensa, baja visibilidad y alta humedad. Este tipo de agrupación aporta valor añadido al análisis, ya que permite aislar condiciones meteorológicas anómalas sin necesidad de etiquetas explícitas.
+
+#IMPORTANTE: QUEDA POR HACER
+Acabar validación modelo PCA

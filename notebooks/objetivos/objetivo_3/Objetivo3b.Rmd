@@ -1,0 +1,580 @@
+---
+title: "Ejercicio3b"
+output: html_document
+date: "2025-05-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+# Carga de datos
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+
+```
+
+
+
+Leemos el archivo calidad del aire
+```{r}
+calidad <- read_csv("Calidad_Aire_limpio.csv")
+# eliminar todo lo posterior al inicio de la DANA
+calidad <- calidad %>% 
+  filter(FechaHora < as.POSIXct("2024-11-17 18:00:00", tz = "UTC"))
+
+
+```
+
+```{r}
+meteo <- read_csv("meteorología_horaria_limpio.csv")
+# (suponiendo que 'fecha' es Date y 'hora' numérico de 0 a 23)
+meteo <- meteo %>% 
+  filter(
+    fecha  < as.Date("2024-11-17") |
+    (fecha == as.Date("2024-11-17") & hora < 18)
+  )
+
+
+
+# Opción 2: usar distinct para eliminar duplicados conservando todas las columnas
+meteo_unicos <- meteo %>%
+  distinct(fecha, hora, .keep_all = TRUE)
+
+# Sobreescribe meteo quedándote sólo con la primera fila de cada (fecha, hora)
+meteo <- meteo %>%
+  group_by(fecha, hora) %>%
+  filter(row_number() == 1) %>%
+  ungroup()
+```
+
+
+```{r}
+# 1) Prepara calidad2 con fecha y hora
+calidad2 <- calidad %>%
+  mutate(
+    fecha = as.Date(FechaHora),
+    hora  = hour(FechaHora)
+  )
+
+# 2) Asegura unicidad en meteo (una fila por fecha–hora)
+meteo <- meteo %>%
+  distinct(fecha, hora, .keep_all = TRUE)
+
+# 3) Left join: cada fila de calidad2 conservará su orden,
+#    y se le “pegarán” las columnas de meteo donde coincida.
+#    Si no hay correspondencia, esas columnas quedarán NA.
+calidad_meteo <- calidad2 %>%
+  left_join(meteo, by = c("fecha", "hora"))
+na_counts <- sapply(calidad_meteo, function(col) sum(is.na(col)))
+print(na_counts)
+```
+
+
+
+Observamos como hay bastantes valores faltantes de temperatura, vamos a estudiar porque esta pasando esto mirando las fechas:
+
+
+
+```{r}
+library(dplyr)
+
+meteo_cols <- c(
+  "Temperatura",
+  "Tiempo",
+  "Precipitaciones ( mm)",
+  "Humedad (%)",
+  "Velocidad del viento (Km/h)",
+  "Ráfaga de viento (Km/h)",
+  "Ángulo del viento (°)",
+  "Dirección del viento",
+  "Nubosidad (%)",
+  "Visibilidad ( Km)"
+)
+
+# 1) Sólo para inspeccionar, sin asignar:
+calidad_meteo %>% 
+  filter(if_any(all_of(meteo_cols), is.na)) %>% 
+  print(n = Inf)
+
+# Luego lo imprimes:
+print(calidad_meteo, n = Inf)
+
+```
+
+Observamos como los valores faltantes se concentran en un peridodo de tiempo. Esto se debe a que al hacer el join si no habia un valor de temperatura par esa zona en ese momento, se ponian valores nan. Como nuestra base de datos de temperatura no llega hasta tan atras en el tiempo como nuestra base de datos de calidad del aire se producen estos falntates. Para solucionarlo eliminamos las filas que tengan faltantes en las variables de meteorologia
+
+
+
+
+```{r}
+calidad_meteo <- calidad_meteo %>%
+  drop_na(
+    Temperatura,
+    Tiempo,
+    `Precipitaciones ( mm)`,
+    `Humedad (%)`,
+    `Velocidad del viento (Km/h)`,
+    `Ráfaga de viento (Km/h)`,
+    `Ángulo del viento (°)`,
+    `Dirección del viento`,
+    `Nubosidad (%)`,
+    `Visibilidad ( Km)`
+  )
+```
+
+
+
+
+
+
+```{r}
+na_counts <- sapply(calidad_meteo, function(col) sum(is.na(col)))
+print(na_counts)
+```
+
+
+
+```{r}
+calidad_meteo
+```
+
+
+
+
+
+#Clustering
+
+
+```{r}
+# Carga de librerías
+library(dplyr)
+library(lubridate)
+library(cluster)
+library(FactoMineR)
+library(factoextra)
+library(NbClust)
+library(clValid)
+library(grid)
+library(gridExtra)
+```
+
+
+
+```{r}
+
+calidad_meteo <- calidad_meteo %>%
+  mutate(
+    wind_x = `Velocidad del viento (Km/h)` * cos(`Ángulo del viento (°)` * pi/180),
+    wind_y = `Velocidad del viento (Km/h)` * sin(`Ángulo del viento (°)` * pi/180)
+  )
+
+```
+
+```{r}
+# 2) Preparar matriz de clustering: solo contaminantes
+vars_cont <- calidad_meteo %>%
+  select(
+    NO,
+    NO2,
+    NOx,
+    O3,
+    PM10,
+    `PM2.5`,
+    SO2
+  )
+vars_cont_clean  <- na.omit(vars_cont)
+vars_cont_scaled <- scale(vars_cont_clean)
+
+```
+
+
+
+```{r}
+# 3) Validación de clusterability (Hopkins)
+set.seed(100)
+mini_c <- as.data.frame(vars_cont_scaled) %>% sample_n(min(1000, nrow(.)))
+hop <- get_clust_tendency(data = mini_c, n = 200, graph = FALSE)$hopkins_stat
+print(hop)
+```
+
+
+```{r}
+
+# 4) Determinar k óptimo con Silhouette y WSS
+set.seed(100)
+mini2_c <- as.data.frame(vars_cont_scaled) %>% sample_n(min(10000, nrow(.)))
+
+p1 <- fviz_nbclust(
+  x          = mini2_c,
+  FUNcluster = hcut,
+  method     = "silhouette",
+  hc_method  = "ward.D2",
+  k.max      = 10,
+  hc_metric  = "euclidean"
+) + labs(title = "Silhouette")
+
+p2 <- fviz_nbclust(
+  x          = mini2_c,
+  FUNcluster = hcut,
+  method     = "wss",
+  hc_method  = "ward.D2",
+  k.max      = 10,
+  hc_metric  = "euclidean"
+) + labs(title = "WSS")
+
+grid.arrange(p1, p2, nrow = 1)
+
+```
+
+Aunque el pico máximo de la anchura media de silueta se da en k=2, ese reparto tan grueso nos dejaría con sólo dos categorías muy generales. Si miramos la curva de silueta, tras la caída brusca de k=3 a k=4 la anchura se mantiene prácticamente constante entre k=4 y k=7, rondando valores aceptables (~0.3). Es decir, en ese rango estamos añadiendo clusters sin penalizar demasiado la cohesión interna y la separación entre grupos.
+Por otro lado, en el gráfico de “codo” de WSS vemos que la pendiente de la curva es muy pronunciada hasta k≈7; a partir de ahí la disminución del WSS (inercia intra-cluster) se vuelve mucho más lenta. Ese punto de inflexión en la pendiente —el verdadero “codo”— está alrededor de 7 clusters.
+Si combinamos ambas reglas:
+Regla de la silueta: buscamos un k en el que la anchura no haya caído aún demasiado (la meseta de k=4…7).
+Regla del codo: buscamos el punto donde dejar de ganar reducción de WSS de forma sustancial (alrededor de k=7).
+El valor k = 7 es el óptimo de compromiso que maximiza la separación relativa de los clusters sin sobredimensionarlos, capturando así suficiente heterogeneidad en los datos sin caer en agrupaciones demasiado pequeñas o poco robustas.
+
+```{r}
+
+# 5) Clustering jerárquico (sobre muestra)
+set.seed(190)
+df_mini <- calidad_meteo %>% sample_n(min(25000, nrow(.)))
+
+vars_for_clust <- df_mini %>%
+  select(NO, NO2, NOx, O3, PM10, `PM2.5`, SO2)
+rownames(vars_for_clust) <- seq_len(nrow(vars_for_clust))
+vars_scaled <- scale(vars_for_clust)
+
+dist_mat <- dist(vars_scaled, method = "euclidean")
+hc <- fastcluster::hclust(dist_mat, method = "ward.D2")
+k_opt <- 6  # sustituye por el número hallado en el paso 4
+grupos <- factor(cutree(hc, k = k_opt))
+
+df_clustered <- df_mini %>% mutate(cluster = grupos)
+print(table(grupos))
+```
+
+```{r}
+
+
+
+library(dplyr)
+library(lubridate)
+
+# 6) Resumen de clusters: medias (numéricas) y moda (categóricas)
+
+# 6.1 Medias de todas las variables numéricas, incluyendo Ángulo del viento
+medias <- df_clustered %>%
+  group_by(cluster) %>%
+  summarise(
+    # Meteorología
+    temperatura   = mean(Temperatura,              na.rm = TRUE),
+    precipitacion = mean(`Precipitaciones ( mm)`, na.rm = TRUE),
+    humedad       = mean(`Humedad (%)`,           na.rm = TRUE),
+    vel_viento    = mean(`Velocidad del viento (Km/h)`, na.rm = TRUE),
+    rafaga        = mean(`Ráfaga de viento (Km/h)`,      na.rm = TRUE),
+    nubosidad     = mean(`Nubosidad (%)`,         na.rm = TRUE),
+    visibilidad   = mean(`Visibilidad ( Km)`,     na.rm = TRUE),
+    wind_x        = mean(wind_x,                   na.rm = TRUE),
+    wind_y        = mean(wind_y,                   na.rm = TRUE),
+    # Ángulo del viento (media simple en grados)
+    angulo_viento = mean(`Ángulo del viento (°)`,  na.rm = TRUE),
+    # Contaminantes
+    NO    = mean(NO,    na.rm = TRUE),
+    NO2   = mean(NO2,   na.rm = TRUE),
+    NOx   = mean(NOx,   na.rm = TRUE),
+    O3    = mean(O3,    na.rm = TRUE),
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(`PM2.5`,na.rm = TRUE),
+    SO2   = mean(SO2,   na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 6.2 Moda de variables categóricas
+mes_freq <- df_clustered %>%
+  mutate(mes = month(fecha, label = TRUE, abbr = FALSE)) %>%
+  group_by(cluster) %>%
+  summarise(
+    mes_mas_comun = names(which.max(table(mes))),
+    .groups = "drop"
+  )
+
+tiempo_freq <- df_clustered %>%
+  group_by(cluster) %>%
+  summarise(
+    tiempo_mas_comun = names(which.max(table(Tiempo))),
+    .groups = "drop"
+  )
+
+# 6.3 Año más frecuente
+anio_freq <- df_clustered %>%
+  mutate(anio = year(fecha)) %>%
+  group_by(cluster) %>%
+  summarise(
+    anio_mas_comun = names(which.max(table(anio))),
+    .groups = "drop"
+  )
+
+# 6.4 Unir todo en un único resumen
+resumen_cluster <- medias %>%
+  left_join(mes_freq,    by = "cluster") %>%
+  left_join(tiempo_freq, by = "cluster") %>%
+  left_join(anio_freq,   by = "cluster")
+
+print(resumen_cluster)
+
+
+```
+
+
+Cluster 1 corresponde al mes de abril y refleja el pico primaveral de ozono, con O₃ cerca de 72 µg/m³ y niveles muy bajos de NOₓ y partículas. Temperatura templada (≈ 20 °C), humedad intermedia (59 %) y nubosidad moderada (28 %), junto a viento suave–moderado y visibilidad alta. Coincide con el “verano químico” del ozono descrito en el PDF.
+
+Cluster 2 agrupa observaciones de octubre con concentraciones moderadas–bajas de todos los contaminantes (O₃ ≈ 44 µg/m³; NOₓ ≈ 3–17 µg/m³; PM10 ≈ 10 µg/m³; PM2.5 ≈ 6 µg/m³). Temperatura suave (18 °C), humedad elevada (64 %) y nubosidad moderada (29 %). Refleja la transición otoñal, donde el ozono desciende tras el verano químico y las partículas se mantienen contenidas.
+
+Cluster 3 se centra en febrero y presenta un episodio invernal de partículas: PM10 ≈ 33 µg/m³ y PM2.5 ≈ 20 µg/m³, con O₃ bajo (≈ 40 µg/m³). Temperatura fría (18 °C), humedad alta (65 %) y nubosidad moderada (27 %). Viento suave y visibilidad alta, condiciones que favorecen inversión térmica y acumulación de partículas.
+
+Cluster 4, mayoritariamente de enero, muestra NOₓ moderados–altos (NOₓ ≈ 56 µg/m³), partículas moderadas (PM10 ≈ 17 µg/m³; PM2.5 ≈ 9 µg/m³) y O₃ reducido (≈ 33 µg/m³). Temperatura fresca (17 °C), humedad elevada (61 %) y nubosidad moderada–alta (25 %). Viento moderado y visibilidad alta, reflejando emisiones urbanas estancadas.
+
+Cluster 5 también de enero refleja un episodio agudo de contaminación: NOₓ muy elevado (≈ 107 µg/m³), partículas altas (PM10 ≈ 32 µg/m³; PM2.5 ≈ 18 µg/m³) y O₃ muy bajo (≈ 16 µg/m³). Temperatura baja (15 °C), humedad alta (61 %) y nubosidad elevada (24 %). Viento moderado–fuerte y visibilidad reducida (≈ 5 km), característico de condiciones de estabilidad atmosférica que concentran contaminantes.
+
+Cluster 6, el más extremo, se da en enero y presenta los máximos absolutos de NOₓ (≈ 248 µg/m³), SO₂ elevado (≈ 6,6 µg/m³) y partículas (PM10 ≈ 39 µg/m³; PM2.5 ≈ 19 µg/m³), con O₃ muy bajo (≈ 12 µg/m³). Temperatura muy fría (14 °C), humedad moderada (58 %) y nubosidad moderada (26 %). Viento moderado y visibilidad baja, típico de un episodio severo de smog invernal con muy poca dispersión.
+
+En conjunto, los seis clusters reproducen fielmente la estacionalidad descrita en el Resumen\_objetivo\_1.pdf: máximos de ozono en primavera, picos de partículas y NOₓ en invierno, e identifican tanto situaciones de fondo urbano como los episodios más adversos de contaminación invernal bajo condiciones de estabilidad atmosférica.
+
+
+##Interpretacion primera y segunda componente
+```{r}
+# 7) Análisis PCA de las variables de contaminación escaladas
+library(FactoMineR)
+library(factoextra)
+
+# 7.0: Ejecutar PCA sobre vars_scaled (ya centrado y escalado)
+miPCA <- PCA(as.data.frame(vars_scaled), scale.unit = FALSE, graph = FALSE)
+
+```
+
+
+```{r}
+# 7.1: Gráfico de variables (direcciones de las contaminantes)
+fviz_pca_var(miPCA) +
+  ggtitle("PCA: Variables de contaminación")
+```
+Dimensión 1 (48,6 % de la varianza) contrapone los óxidos de nitrógeno (NO, NO₂, NOₓ) y el SO₂—todos con cargas positivas elevadas—a la carga negativa del ozono (O₃). Esto significa que Dim 1 describe el eje “contaminación primaria” (NOₓ/SO₂) frente a “ozono secundario”.
+Dimensión 2 (19,2 % de la varianza) está dominada por las partículas (PM10 y PM2.5), que muestran cargas fuertes y positivas, mientras que el resto de contaminantes queda cerca de cero. Por tanto, Dim 2 discrimina los episodios de alto material particulado de aquellos con bajos niveles de partículas.
+
+
+```{r}
+
+# 7.2: Individuos (muestra de 400), coloreados por cluster
+set.seed(100)
+ids_400  <- sample(seq_len(nrow(miPCA$ind$coord)), 1500)
+ids_chr  <- rownames(miPCA$ind$coord)[ids_400]
+
+fviz_pca_ind(
+  miPCA,
+  geom        = "point",
+  habillage   = grupos,
+  addEllipses = TRUE,
+  palette     = "Dark2",
+  select.ind  = list(name = ids_chr)
+) + ggtitle("PCA: Individuos (muestra 400)")
+
+
+```
+
+Cluster 1 aparece en el cuadrante inferior izquierdo (Dim1 < 0, Dim2 < 0), donde ambos ejes toman valores negativos. Eso indica observaciones con ozono elevado (O₃ carga negativamente en Dim1) y bajos niveles de NOₓ, SO₂ y partículas (cargas positivas en Dim1 y Dim2).
+Cluster 3 se sitúa en el cuadrante superior izquierdo (Dim1 < 0, Dim2 > 0). Su posición refleja bajo NOₓ/SO₂/ozono (Dim1 negativo) pero altas partículas (Dim2 positivo), coincidiendo con los episodios invernales de material particulado.
+Cluster 6 queda muy desplazado hacia la derecha en la parte inferior (Dim1 ≫ 0, Dim2 < 0), caracterizando los picos extremos de NOₓ y SO₂ con baja concentración de partículas, pues Dim1 es muy positivo y Dim2 negativo.
+Cluster 5 ocupa el cuadrante inferior derecho próximo al eje horizontal (Dim1 > 0, Dim2 ligeramente < 0), lo que indica niveles altos de NOₓ/SO₂ pero partículas no excesivas, reflejando episodios fuertes de contaminación primaria sin tanto PM.
+Cluster 2 queda también en la mitad derecha, pero cerca del origen y con Dim2 casi cero (Dim1 > 0, Dim2 ≈ 0), asociándose a contaminación primaria moderada y bajas partículas, típico de la transición otoñal.
+
+
+```{r}
+# 7.3: Todos los individuos en PC1 vs PC2
+fviz_pca_ind(
+  miPCA,
+  geom        = "point",
+  habillage   = grupos,
+  addEllipses = TRUE,
+  palette     = "Dark2"
+) + ggtitle("PCA: PC1 vs PC2 (todos los individuos)")
+
+
+```
+Se corroboran los clusters anteriores
+
+
+##Interpretacion primera y tercera componente
+```{r}
+# 7.4: Variables en PC1 vs PC3
+fviz_pca_var(miPCA, axes = c(1, 3)) +
+  ggtitle("PCA: Variables (PC1 vs PC3)")
+
+```
+
+
+
+
+```{r}
+# 7.5: Individuos en PC1 vs PC3 (muestra de 400)
+fviz_pca_ind(
+  miPCA,
+  axes        = c(1, 3),
+  geom        = "point",
+  habillage   = grupos,
+  addEllipses = TRUE,
+  palette     = "Dark2",
+  select.ind  = list(name = ids_chr)
+) + ggtitle("PCA: PC1 vs PC3 (muestra 400)")
+```
+Cluster 1 (círculos verdes) se ubica con valores negativos en la primera componente y cercanos a cero en la tercera (PC1 < 0, PC3 ≈ 0). Esto indica concentraciones muy elevadas de ozono secundario (O₃) y bajos niveles de NOₓ, SO₂ y partículas, identificando el pico primaveral de ozono.
+Cluster 2 (triángulos naranjas) presenta PC1 aún negativo pero PC3 claramente positivo (PC1 < 0, PC3 > 0). Corresponde a meses de transición otoñal con niveles moderados de ozono y un aumento de SO₂ (y partículas asociadas), mientras que NOₓ permanece contenido.
+Cluster 3 (cruces moradas) se sitúa en torno al origen (PC1 ≈ 0, PC3 ≈ 0), lo que refleja concentraciones de fondo urbano: sin picos notables de ozono, NOₓ, partículas o SO₂.
+Cluster 4 (equis rosas) tiene PC1 cercano a cero y PC3 levemente positivo (PC1 ≈ 0, PC3 > 0). Indica episodios urbanos de contaminación moderada con SO₂ algo elevado y partículas en torno a la media, sin extremos de NOₓ ni de ozono.
+Cluster 5 (rombos verdes claros) aparece con PC1 y PC3 ambos positivos (PC1 > 0, PC3 > 0). Esto señala concentraciones altas de NOₓ combinadas con SO₂ y partículas elevadas, identificando episodios agudos de contaminación primaria con aportes de SO₂.
+Cluster 6 (asteriscos amarillos) se desplaza muy a la derecha y cerca del eje horizontal (PC1 ≫ 0, PC3 ≈ 0). Representa los picos extremos de NOₓ, con niveles medios de SO₂ y partículas, característicos del smog invernal de óxidos de nitrógeno.
+Cluster 7 (cuadrados marrón claro) ocupa también PC1 positivo y PC3 positivo (PC1 > 0, PC3 > 0), pero menos extremo que el 5. Corresponde a altos niveles de contaminación primaria (NOₓ) junto a un SO₂ claramente elevado, integrando eventos severos de mezcla de gases y partículas.
+
+
+
+#PLS
+```{r}
+# 1) Instala y carga el paquete pls
+
+library(pls)
+
+# 2) Prepara tus datos: selecciona X (meteorología) e Y (contaminantes)
+datos_pls <- calidad_meteo %>%
+  select(
+    # Predictores meteorológicos
+    Temperatura,
+    `Precipitaciones ( mm)`,
+    `Humedad (%)`,
+    `Velocidad del viento (Km/h)`,
+    `Ráfaga de viento (Km/h)`,
+    `Nubosidad (%)`,
+    `Visibilidad ( Km)`,
+    wind_x, wind_y,
+    # Respuesta: contaminantes
+    NO, NO2, NOx, O3, PM10, `PM2.5`, SO2
+  ) %>%
+  na.omit()  # elimina filas con NA
+
+# 3) Ajusta el modelo PLSR
+#    - formula: varias Y ~ todas las X
+#    - ncomp: número máximo de componentes a estimar
+#    - scale = TRUE: centra y escala internamente
+#    - validation = "CV": validación cruzada v-fold (por defecto 10-fold)
+set.seed(123)
+pls_fit <- plsr(
+  cbind(NO, NO2, NOx, O3, PM10, `PM2.5`, SO2) ~
+    Temperatura + `Precipitaciones ( mm)` + `Humedad (%)` +
+    `Velocidad del viento (Km/h)` + `Ráfaga de viento (Km/h)` +
+    `Nubosidad (%)` + `Visibilidad ( Km)` +
+    wind_x + wind_y,
+  data       = datos_pls,
+  ncomp      = 9,
+  scale      = TRUE,
+  validation = "CV"
+)
+
+# 4) Explora resultados
+summary(pls_fit)           # varianza explicada en X y Y por comp.
+validationplot(pls_fit)    # gráfico de RMSEP vs n.º de componentes
+```
+
+```{r}
+opt_ncomp = 3
+```
+
+
+
+
+```{r}
+# 1) Extraer coeficientes para el nº óptimo de componentes
+coefs_raw <- coef(pls_fit, ncomp = opt_ncomp)
+
+# Si viniera en 3D (pred × resp × comp), simplificamos al plano X–Y:
+if (length(dim(coefs_raw)) == 3) {
+  coefs <- coefs_raw[ , , 1]   # componente elegido
+} else {
+  coefs <- coefs_raw
+}
+
+# 2) Convertir a data.frame para manejarlo mejor
+pred_names <- dimnames(coefs)[[1]]
+resp_names <- dimnames(coefs)[[2]]
+coef_df <- as.data.frame(coefs)
+rownames(coef_df) <- pred_names
+colnames(coef_df) <- resp_names
+
+# 3) Para cada contaminante, ordena las variables por peso absoluto
+list_pesos <- lapply(resp_names, function(resp) {
+  vec <- coef_df[[resp]]
+  # orden descendente en valor absoluto
+  orden <- order(abs(vec), decreasing = TRUE)
+  data.frame(
+    variable = pred_names[orden],
+    coef     = vec[orden],
+    row.names = NULL
+  )
+})
+names(list_pesos) <- resp_names
+
+# 4) Mostrar en consola con título y kable
+for (resp in resp_names) {
+  cat("#### Contaminante:", resp, "\n\n")
+  print(
+    knitr::kable(
+      list_pesos[[resp]],
+      caption = paste("Coeficientes PLS para", resp)
+    )
+  )
+  cat("\n\n")
+}
+
+```
+
+
+Convención usada para el viento:
+• wind y > 0 → sopla desde el este (brisa de mar).
+• wind x > 0 → sopla desde el norte.
+
+Coeficientes con valor absoluto ≳ 0,5 son los realmente influyentes.
+NO
+
+El NO sube en noches frías y secas con aire poco movido. Temperatura negativa (-1.55) indica máximos con frío; humedad negativa (-1.06) refuerza la acumulación en ambientes secos. Viento medio (-0.98) y ráfagas (-0.80) negativos muestran que la calma favorece el gas; basta algo de ventilación para dispersarlo. El término wind x (-0.86) implica que los vientos del sur (wind x < 0) –típicos de brisas terrales débiles– dan los mayores picos. Nubosidad negativa (-0.76) confirma que cielos despejados, con inversión térmica, concentran el NO.
+
+
+NO₂
+Patrón calcado pero todavía más marcado: temperatura (-2.54), viento (-1.97), ráfaga (-1.69), humedad (-1.34), wind x (-1.33) y nubosidad (-1.15). Las mismas noches frías, secas y en calma (sobre todo con débil flujo sur) disparan el NO₂
+.
+NOx
+La suma NO+NO₂ depende esencialmente de los mismos factores, con coeficientes aún mayores (-4.9 a -2.3). Queda claro que la combinación de fuerte emisión y mala dispersión gobierna los picos.
+
+O₃
+El ozono se comporta al revés que los NOₓ. Temperatura muy positiva (+8.29): calor = fotólisis y producción de O₃. wind y positivo (+6.22) indica que la brisa marina (desde el este) inyecta aire enriquecido en ozono y radicales. La ventilación horizontal y vertical también ayuda (velocidad +5.40, ráfaga +2.90). Humedad negativa (-1.03) muestra que días muy húmedos frenan la fotólisis y destruyen radicales, reduciendo el O₃.
+
+PM10
+
+Las partículas gruesas bajan con viento y suben con calma. Ráfaga (-0.95) y velocidad (-0.88) dominan. wind x (-0.63) vuelve a señalar que flujo sur favorece la acumulación urbana,(trae polvo de áfrica); temperatura negativa (-0.57) asocia aire frío y estable a polvo retenido. 
+
+
+PM2.5
+La fracción fina es muy sensible a la ventilación: velocidad (-1.14) y ráfaga (-1.10) fuertes la diluyen. Destaca humedad positiva (+0.66): la formación secundaria de sulfatos y nitratos se acelera en atmósfera húmeda. El resto de variables quedan por debajo del umbral de importancia.
+
+SO₂
+Ningún coeficiente meteorológico supera |0.05|. Las concentraciones de SO₂ dependen casi por completo de las emisiones puntuales (buques, industria) más que del estado del tiempo.
+
+
+
+
+
+
