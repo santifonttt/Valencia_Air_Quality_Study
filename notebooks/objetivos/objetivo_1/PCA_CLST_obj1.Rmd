@@ -1,6 +1,8 @@
 ---
 title: "Untitled"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 date: "2025-05-21"
 ---
 
@@ -27,6 +29,7 @@ library(factoextra)
 library(pcaMethods)
 library(tibble)
 library(cluster)
+library(pheatmap)
 ```
 
 
@@ -74,10 +77,12 @@ missing_pct <- df %>%
     Porcentaje_Faltantes = sum(is.na(Valor)) / n() * 100,
     .groups = "drop"
   ) %>%
-  arrange(Porcentaje_Faltantes) %>%
-
+  arrange(Porcentaje_Faltantes)
+```
+```{r}
 print(missing_pct)
 ```
+
 
 ```{r}
 miss_var_summary(df)
@@ -118,10 +123,6 @@ missing_pct_year <- df %>%
   )
 
 print(missing_pct_year)
-```
-
-```{r}
-length(datos_limpios$FechaHora)
 ```
 
 
@@ -314,6 +315,7 @@ Observamos una muy ligera disminución, pero muy insignificante. Podemos conclui
 Para ver patrones entre contaminantes vamos a realizar, en primer lugar, un PCA. Dado que hemos imputado los faltantes, podemos usar cualquier modelo del PCA.
 
 ```{r}
+set.seed(100)
 df_pca_20k <- datos_limpios %>%
   filter(year(FechaHora) == 2023) %>%
   sample_n(20000) %>%
@@ -334,6 +336,7 @@ eig.val <- get_eigenvalue(res.pca)
 Observamos que la CP1 explica un 50.5% de la variabilidad, la CP2 explica un 17.7% y la CP3 un 14.3%. Dado este gráfico podemos tomar 2 o 3 componentes principales. Primero visualizaremos la CP1 y CP2
 
 ```{r}
+set.seed(100)
 fviz_pca_biplot(
   res.pca,
   axes        = c(1, 2),    
@@ -412,6 +415,7 @@ fviz_contrib(
 En la tercera componente la variable $SO2$ es la que más contribuye con mucha diferencia. Vamos a ver el biplot para CP1 y CP3.
 
 ```{r}
+set.seed(100)
 fviz_pca_biplot(
   res.pca,
   axes        = c(1, 3),    
@@ -433,6 +437,7 @@ Como habiamos visto, la variable $SO2$ tiene un loading alto en la dimensión 3,
 Ahora vamos a añadir los puntos de origen.
 
 ```{r}
+set.seed(100)
 fviz_pca_biplot(
   res.pca,
   habillage    = "Origen",
@@ -503,6 +508,7 @@ fviz_pca_biplot(
 Observamos más o menos lo mismo que antes. Las zonas de 'puertos' tienden a irse hacia la parte positiva de la PC1, lo que indica que tienden a generar más $PM10$, $PM2.5$, $NO$, $NO2$, $NOx$ y $SO2$. Las zonas en el extrarradio tienden a generar más $PM10$ y $PM2.5$. Pero en general todos están distribuidos similarmente.
 
 ```{r}
+set.seed(100)
 fviz_pca_biplot(
   res.pca_grp,
   axes        = c(1, 3), 
@@ -524,6 +530,7 @@ Parece ser que:
 Vamos a validar el modelo.
 
 ```{r}
+set.seed(100)
 K <- 3
 
 res.pca <- PCA(df_pca_20k, 
@@ -555,8 +562,6 @@ miT2[idx_max_anomalia]
 # Mostrar la fila correspondiente en los datos originales
 df[idx_max_anomalia, ]
 ```
-
-Observamos que el valor más alto en Quart de Poblet el 3 de Febrero de 2023 a las 8 de la mañana. Esto podría deberse a muchos factores.
 
 # Clustering
 
@@ -657,17 +662,23 @@ plot(hc,
      main   = "Dendrograma: Ward + Euclidiana")
 rect.hclust(hc, k = k_opt, border = 2:(k_opt+1))
 
+rownames(station_clusters_df) <- NULL
+
+annotation <- station_clusters_df %>%
+  column_to_rownames("Origen")
+
+# Llamada a pheatmap 
 pheatmap(
   as.matrix(dist_mat),
   clustering_distance_rows   = dist_mat,
   clustering_distance_cols   = dist_mat,
   clustering_method          = "ward.D2",
-  cutree_rows                = 3,
-  cutree_cols                = 3,
-  annotation_row = data.frame(cluster = factor(clusters)),
-  annotation_col = data.frame(cluster = factor(clusters)),
-  show_rownames = FALSE,
-  show_colnames = FALSE
+  cutree_rows                = k_opt,
+  cutree_cols                = k_opt,
+  annotation_row             = annotation,
+  annotation_col             = annotation,
+  show_rownames              = FALSE,
+  show_colnames              = FALSE
 )
 
 # 11) Proyección PCA coloreada por cluster
@@ -713,3 +724,5 @@ station_clusters_df
 ```
 
 Aqui vemos en que clusters se ha asignado cada estación de medición.
+
+

@@ -30,6 +30,8 @@ Primero de todo, vamos a cargar la base de datos.
 
 ```{r}
 df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/base_para_obj1.csv", stringsAsFactors = FALSE)
+df <- df %>%
+  mutate(FechaHora = ymd_hms(paste(Fecha, Hora, "00", "00", sep = ":"), tz = "UTC"))
 ```
 
 Ahora que ya sabemos la distribución de los datos, es decir en que años y que estaciones se miden (documento de prep_csv_obj1), vamos a empezar el analisis de los contaminantes, exclusivamente. Me refiero a que vamos a estudiar las siguientes variables:
@@ -509,7 +511,7 @@ Esto indica que en estas zonas los valores de PM10 se ven afectados por su ubica
 
 En resumen, los valores de PM10 no se ven afectados por la zona en la gran mayoría de casos. Por lo que la estación de medición no parece ser muy influyente.
 
-#### Comportamiento por timepo
+#### Comportamiento por tiempo
 
 Vamos a ver como se comporta el contaminante a lo largo del tiempo. Para ello, vamos a hacer un gráfico con la evolución de la variable a lo largo del tiempo.
 
@@ -1789,7 +1791,7 @@ La hipótesis nula es que todas las medias de log_PM2.5 son iguales independient
 Como el p-value es menor que 0.05, rechazamos la hipotesis nula, y por tanto existe al menos un par de origenes cuyas medias difieren significativamente.
 
 ```{r}
-tukey_pm10 <- TukeyHSD(fit_pm2.5)
+tukey_pm2.5 <- TukeyHSD(fit_pm2.5)
 
 res <- as.data.frame(tukey_pm2.5$Origen)
 
@@ -1802,7 +1804,7 @@ Esto muestra que tan solo 3 pares de estaciones tienen diferencias significativa
 
 Con esto podemos concluir que, los valores de PM2.5 no varían dependiendo de la zona, excepto las estaciones que se vieron afectadas por la DANA en 2024.
 
-#### Comportamiento por timepo
+ so#### Comportamiento por timepo
 
 Vamos a ver como se comporta el contaminante cada año Para ello, vamos a hacer un gráfico.
 
@@ -2360,6 +2362,258 @@ df %>%
 
 Gracias a esta gráfica podemos ver más facilmente el patrón de faltantes de la variable PM2.5. Podemos también ver en que estaciones se ha medido la variable, su proporción de faltantes,... Tambien vemos que la distribución de los faltantes en PM2.5 es muy similar a la de PM10, como ya habiamos mencionado antes.
 
+## PM10 y PM2.5 juntos 
+
+```{r}
+df_pm_anual <- df_sin_DANA %>%
+  group_by(year = year(FechaHora)) %>%
+  summarise(across(c("PM10", "PM2.5"), mean, na.rm = TRUE)) %>%
+  filter(!is.na(year)) %>%
+  ungroup()
+
+df_long <- df_pm_anual %>%
+  pivot_longer(
+    cols      = c("PM10", "PM2.5"),
+    names_to  = "Gas",
+    values_to = "Concentracion"
+  )
+
+# 2) Gráfico con áreas superpuestas, líneas y puntos
+ggplot(df_long, aes(x = year, y = Concentracion, 
+                    group = Gas, fill = Gas, color = Gas)) +
+  geom_area(alpha = 0.4, position = "identity") +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 2019:2024, limits = c(2019, 2024)) +
+  scale_fill_manual(
+    values = c(
+      PM10  = "#FFD580",
+      PM2.5 = "#6EC6FF"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      PM10  = "#FF8C00",
+      PM2.5 = "#4682B4"
+    )
+  ) +
+  labs(
+    title    = "Evolución anual de la concentración media de PM10 y PM2.5",
+    subtitle = "Valores medios de todas las estaciones en Valencia",
+    x        = "Año",
+    y        = "Concentración media (µg/m³)",
+    fill     = "Gas",
+    color    = "Gas",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60"),
+    legend.position   = "bottom"
+  )
+```
+
+```{r}
+df_pm_mensual <- df_sin_DANA %>%
+  mutate(
+    month = month(FechaHora, label = TRUE, abbr = TRUE)
+  ) %>%
+  group_by(month) %>%
+  summarise(
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(PM2.5, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols      = c("PM10","PM2.5"),
+    names_to  = "Gas",
+    values_to = "Concentracion"
+  ) 
+  #slice(1:(n() - 3))
+
+# 2) Gráfico tipo área/línea/punto por mes
+ggplot(df_pm_mensual,
+       aes(x = month, y = Concentracion,
+           group = Gas, fill = Gas, color = Gas)) +
+  geom_area(alpha = 0.4, position = "identity") +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_fill_manual(
+    values = c(
+      PM10  = "#FFD580",
+      PM2.5 = "#6EC6FF"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      PM10  = "#FF8C00",
+      PM2.5 = "#4682B4"
+    )
+  ) +
+  labs(
+    title    = "Evolución media mensual de PM10 y PM2.5",
+    subtitle = "Media agregada sobre todos los años",
+    x        = "Mes",
+    y        = "Concentración media (µg/m³)",
+    fill     = "Gas",
+    color    = "Gas",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60"),
+    legend.position   = "bottom"
+  )
+```
+
+```{r}
+dias_orden <- c("lunes","martes","miércoles","jueves","viernes","sábado","domingo")
+
+df_pm_diario <- df_sin_DANA %>%
+  mutate(
+    Dia_Semana = factor(Dia_Semana, levels = dias_orden, ordered = TRUE)
+    ) %>%
+  group_by(Dia_Semana) %>%
+  summarise(
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(PM2.5, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols      = c("PM10","PM2.5"),
+    names_to  = "Gas",
+    values_to = "Concentracion"
+  ) 
+
+ggplot(df_pm_diario,
+       aes(x = Dia_Semana, y = Concentracion,
+           group = Gas, fill = Gas, color = Gas)) +
+  geom_area(alpha = 0.4, position = "identity") +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_fill_manual(
+    values = c(
+      PM10  = "#FFD580",
+      PM2.5 = "#6EC6FF"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      PM10  = "#FF8C00",
+      PM2.5 = "#4682B4"
+    )
+  ) +
+  labs(
+    title    = "Concentración media de PM10 y PM2.5 por día de la semana",
+    subtitle = "Agregado sobre todos los años",
+    x        = "Día de la semana",
+    y        = "Concentración media (µg/m³)",
+    fill     = "Gas",
+    color    = "Gas",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60"),
+    legend.position   = "bottom"
+  )
+```
+
+```{r}
+
+df_pm_horario <- df_sin_DANA %>%
+  mutate(hour = hour(FechaHora)) %>%
+  group_by(hour) %>%
+  summarise(
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(PM2.5, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols      = c("PM10","PM2.5"),
+    names_to  = "Gas",
+    values_to = "Concentracion"
+  ) 
+
+ggplot(df_pm_horario, 
+       aes(x = hour, y = Concentracion, 
+           group = Gas, fill = Gas, color = Gas)) +
+  geom_area(alpha = 0.4, position = "identity") +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 0:23, limits = c(0,23)) +
+  scale_fill_manual(
+    values = c(
+      PM10  = "#FFD580",
+      PM2.5 = "#6EC6FF"
+    )
+  ) +
+  scale_color_manual(
+    values = c(
+      PM10  = "#FF8C00",
+      PM2.5 = "#4682B4"
+    )
+  ) +
+  labs(
+    title    = "Concentración media de PM10 y PM2.5 por hora del día",
+    subtitle = "Media agregada sobre todos los años",
+    x        = "Hora del día",
+    y        = "Concentración media (µg/m³)",
+    fill     = "Gas",
+    color    = "Gas",
+    caption  = "Source: your air pollution data"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.background   = element_rect(fill = "white", color = NA),
+    panel.background  = element_rect(fill = "#f7f7f7", color = NA),
+    panel.grid.major  = element_line(color = "gray80"),
+    panel.grid.minor  = element_blank(),
+    axis.title        = element_text(face = "bold"),
+    axis.text         = element_text(color = "gray20"),
+    plot.title        = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle     = element_text(color = "gray40", hjust = 0.5),
+    plot.caption      = element_text(size = 8, color = "gray60"),
+    legend.position   = "bottom"
+  )
+```
+
+
+```{r}
+ggplot(df_sin_DANA, aes(x = FechaHora)) +
+  geom_line(aes(y = PM10, color = "PM10")) +
+  geom_line(aes(y = PM2.5, color = "PM2.5")) +
+  labs(title = "Contaminantes PM10 y PM2.5 a lo largo del tiempo",
+       x = "Fecha y Hora",
+       y = "Concentración (µg/m³)",
+       color = "Contaminante") +
+  theme_minimal()
+```
+
 ## SO2
 
 Ahora vamos a analizar la variable SO2, la cual esta relacionada con las variables PM10 y PM2.5, ya que SO2 es precursor de sulfatos que contribuyen a la formación de material particulado (PM10 y PM10).
@@ -2386,12 +2640,12 @@ ggplot(df, aes(x = FechaHora, y = SO2, group = 1)) +
   labs(
     title = "Evolución temporal de SO2",
     x     = "Año",
-    y     = expression(PM[SO2]~"(µg/m"^3*")")
+    y     = expression(SO~"(µg/m"^3*")")
   ) +
   theme_minimal()
 ```
 
-En este caso parece ser que lso valores de la variable no se vierno afectados por la DANA. Pero se pueden observar unos cuantos picos alrededor de 2021. Vamos a ver que fechas son para poder estudiarlos más a fondo.
+En este caso parece ser que lso valores de la variable no se vieron afectados por la DANA. Pero se pueden observar unos cuantos picos alrededor de 2021. Vamos a ver que fechas son para poder estudiarlos más a fondo.
 
 ```{r}
 fechas_valores_exceso <- df %>%
@@ -2404,7 +2658,7 @@ print(fechas_valores_exceso)
 
 Podemos observar que todos esos valores más elevados provienen de la misma estación, más o menos las mismas horas y meses cercanos. Es decir que podrían ser valores reales y no errores. Además tiene sentido, ya que el SO2 se produce por la combustión de combustibles fosiles en por ejemplo maquinaria pesada presente en puertos, como por ejemplo barcos, gruas, camiones,... 
 
-Buscando por internet, hemos encontrado que Octubre, Noviembre y Diciembre el tráfico de contenedores aumento un 20%, lo cual pudo haber generado estos picos. Por eso, vamos a tratarlos como valore reales.
+Buscando por internet, hemos encontrado que Octubre, Noviembre y Diciembre el tráfico de contenedores aumento un 20%, lo cual pudo haber generado estos picos. Por eso, vamos a tratarlos como valore reales. 
 
 Ahora vamos a ver la distribución de la variable al aplicar una transformación logarítmica, ya que al principio nos sale una distribucion muy sesgada.
 
@@ -2816,7 +3070,7 @@ ggplot(df_mensual_so2_sd, aes(x = mes_num, y = sd_so2)) +
     limits = c(1, 12)
   ) +
   labs(
-    title    = "Evolución anual de la ditribución típica de SO2",
+    title    = "Evolución mensual de la ditribución típica de SO2",
     subtitle = "Desviaciónes típicas mensuales desde todas las estaciones en Valencia",
     x        = "Mes",
     y        = "SD de SO2 (µg/m³)",
