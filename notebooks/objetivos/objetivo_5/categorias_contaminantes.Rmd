@@ -1,0 +1,94 @@
+---
+title: "Intervalos contaminantes"
+output: html_document
+date: "2025-05-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(fastDummies)
+library(lubridate)
+library(readr)
+```
+
+
+```{r}
+df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/data/cleaned/calidad_aire/Calidad_Aire_limpio.csv", stringsAsFactors = FALSE)
+
+df <- df %>%
+  mutate(
+    FechaHora = as.POSIXct(FechaHora, format = "%Y-%m-%d %H:%M:%S", tz     = "Europe/Madrid"),
+    hora     = hour(FechaHora)
+  )
+```
+
+```{r}
+colnames(df)
+```
+
+
+```{r}
+contaminantes <- c('PM10', 'PM2.5', 'NO', 'NO2', 'NOx', 'SO2', 'O3')
+```
+
+```{r}
+# Definimoss rangos segun la OMS
+
+breaks_pm10 <- c(-Inf, 54, 154, 354, 424, Inf)
+labels_pm10 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_pm25 <- c(-Inf, 9, 35, 125, 225, Inf)
+labels_pm25 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_so2 <- c(-Inf, 35, 75, 185, 304, Inf)
+labels_so2 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_no <- c(-Inf, 53, 100, 360, 649, Inf)
+labels_no <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_no2 <- c(-Inf, 53, 100, 360, 649, Inf)
+labels_no2 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_nox <- c(-Inf, 30, 60, 120, 240, Inf)
+labels_nox <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_o3 <- c(-Inf, 54, 70, 85, 105, Inf)
+labelso3 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+```
+
+```{r}
+df_categorias <- df %>%
+    mutate(
+    PM10_cat = cut(PM10, breaks = breaks_pm10, labels = labels_pm10, right = FALSE),
+    PM2.5_cat = cut(PM2.5, breaks = breaks_pm25, labels = labels_pm25, right = FALSE),
+    SO2_cat  = cut(SO2,  breaks = breaks_so2,  labels = labels_so2,  right = FALSE),
+    NO_cat   = cut(NO,   breaks = breaks_no,   labels = labels_no,   right = FALSE),
+    NO2_cat  = cut(NO2,  breaks = breaks_no2,  labels = labels_no2,  right = FALSE),
+    NOx_cat  = cut(NOx,  breaks = breaks_nox,  labels = labels_nox,  right = FALSE),
+    O3_cat   = cut(O3,   breaks = breaks_o3,   labels = labelso3,    right = FALSE)
+  ) %>%
+  fastDummies::dummy_cols(
+    select_columns         = c("PM10_cat","PM2.5_cat","SO2_cat",
+                               "NO_cat","NO2_cat","NOx_cat","O3_cat"),
+    remove_selected_columns = TRUE,
+    remove_first_dummy      = FALSE
+  ) %>%
+  dplyr::select(FechaHora, hora, starts_with("PM10_cat_"), starts_with("PM2.5_cat_"),
+         starts_with("SO2_cat_"),  starts_with("NO_cat_"),
+         starts_with("NO2_cat_"),  starts_with("NOx_cat_"),
+         starts_with("O3_cat_"))
+
+# Echa un vistazo a las primeras filas:
+head(df_categorias)
+```
+
+```{r}
+write.csv(df_categorias, file = "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/notebooks/objetivos/objetivo_5/categorias_contaminantes.csv", row.names = FALSE)
+```
+
+
+
