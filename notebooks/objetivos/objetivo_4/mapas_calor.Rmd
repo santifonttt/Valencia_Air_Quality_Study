@@ -1,0 +1,212 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-05-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(readr)
+library(sf)
+library(lubridate)
+library(ggplot2)
+library(viridis)
+library(gridExtra)
+
+# 1) Leer datos y códigos postales por estación
+df_codes <- read.csv(
+  "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/codigos.csv",
+  stringsAsFactors = FALSE
+)
+df_data <- read.csv(
+  "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/data/cleaned/calidad_aire/Calidad_Aire_limpio.csv",
+  stringsAsFactors = FALSE
+)
+
+# 2) Convertir FechaHora a POSIXct y filtrar 2023 + sólo tus estaciones
+df_data <- df_data %>%
+  mutate(
+    FechaHora = as.POSIXct(
+      FechaHora,
+      format = "%Y-%m-%d %H:%M:%S",
+      tz     = "Europe/Madrid"
+    )
+  )
+# 2) Filtrar 2023 y solo tus estaciones, unir COD_POSTAL
+zonas_sel <- c("Massanassa_UM", "Quart de Poblet", "Sedavi UM",
+               "Torrent-El Vedat", "València - Av. França",
+               "València - Molí del Sol", "València - Pista de Silla",
+               "València - Politècnic", "València Port llit antic Túria",
+               "València Port Moll Trans. Ponent")
+
+df_2023 <- df_data %>%
+  filter(year(FechaHora) == 2023,
+         Origen %in% zonas_sel) %>%
+  left_join(df_codes, by = "Origen")
+
+# 3) Calcular media anual por código postal
+cp_stats <- df_2023 %>%
+  group_by(COD_POSTAL) %>%
+  summarise(
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(PM2.5, na.rm = TRUE),
+    SO2 = mean(SO2, na.rm = TRUE),
+    NO = mean(NO, na.rm = TRUE),
+    NO2 = mean(NO2, na.rm = TRUE),
+    NOx = mean(NOx, na.rm = TRUE),
+    O3 = mean(O3, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+cp_stats <- cp_stats %>%
+  mutate(COD_POSTAL = as.character(COD_POSTAL))
+
+# 4) Leer polígonos de códigos postales
+codigos_sf <- st_read("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/mapa_valencia_ccpp.geojson")%>%
+  mutate(COD_POSTAL = as.character(COD_POSTAL))
+
+# 5) Unir las medias a los polígonos
+codigos_sf2 <- codigos_sf %>%
+  left_join(cp_stats, by = "COD_POSTAL")
+
+bb <- st_bbox( filter(codigos_sf2, !is.na(PM10)) )
+
+# 6) Dibujar coropléticos
+p_PM10 <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = PM10), color = "white") +
+  scale_fill_viridis(option = "inferno", na.value = "grey90", name = "PM10\n(µg/m³)") +
+  labs(title = "Media anual PM10 (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+p_PM25 <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = PM2.5), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "PM2.5\n(µg/m³)") +
+  labs(title = "Media anual PM2.5 (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_PM10, ncol = 1)
+
+```
+```{r}
+unique(df_codes$COD_POSTAL)
+```
+
+
+```{r}
+bb <- st_bbox( filter(codigos_sf2, COD_POSTAL %in% c('46470', '46930', '46910', '46901', '46023', '46015', '46001', '46022', '46024')) )
+
+
+p_PM25 <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = PM2.5), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "PM2.5\n(µg/m³)") +
+  labs(title = "Media anual PM2.5 (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_PM25, ncol = 1)
+```
+
+```{r}
+p_SO2 <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = SO2), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "SO2\n(µg/m³)") +
+  labs(title = "Media anual SO2 (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_SO2, ncol = 1)
+```
+
+```{r}
+p_NO <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = NO), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "NO\n(µg/m³)") +
+  labs(title = "Media anual NO (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_NO, ncol = 1)
+```
+
+```{r}
+p_NO2 <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = NO2), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "NO2\n(µg/m³)") +
+  labs(title = "Media anual NO2 (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_NO2, ncol = 1)
+```
+
+```{r}
+p_NOx <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = NOx), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "NOx\n(µg/m³)") +
+  labs(title = "Media anual NOx (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_NOx, ncol = 1)
+```
+
+```{r}
+p_O3 <- ggplot(codigos_sf2) +
+  geom_sf(aes(fill = O3), color = "white") +
+  scale_fill_viridis(option = "magma", na.value = "grey90", name = "O3\n(µg/m³)") +
+  labs(title = "Media anual O3 (2023) por C.Postal") +
+  coord_sf(
+    xlim = c(bb["xmin"], bb["xmax"]),
+    ylim = c(bb["ymin"], bb["ymax"]),
+    expand = FALSE
+  ) +
+  theme_minimal()
+
+grid.arrange(p_O3, ncol = 1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
