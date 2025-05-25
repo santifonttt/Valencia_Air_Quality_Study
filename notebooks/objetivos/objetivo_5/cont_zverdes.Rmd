@@ -310,41 +310,30 @@ zverdes_contaminantes <- distritos_sf %>%
   )
 ```
 
-```{r}
-ggplot(zverdes_contaminantes, aes(x = area_total, y = NOx)) +
-  geom_point(size = 2, alpha = 0.7) +
-  theme_minimal() +
-  scale_x_continuous(labels = comma) +
-  labs(
-    x     = "Área total de parques (m²)",
-    y     = "Media anual de NO (µg/m³)",
-    title = "Relación entre superficie de parques y nivel de NO"
-  ) +
-  geom_smooth(method = "lm", se = FALSE, color = "steelblue", linetype = "dashed")
-```
 
 
 ```{r}
-# 3. Quitamos la geometría para trabajar solo con valores numéricos
 df_vals <- zverdes_contaminantes %>%
   st_set_geometry(NULL) %>%
-  select(area_total, NO2, NOx, NO, SO2, PM10, `PM2.5`, O3)
+  select(area_total.x, NO2, NOx, NO, SO2, PM10, `PM2.5`, O3)
 
-# 4. Calculamos la matriz de correlaciones
+# 4. Matriz de correlaciones
 cor_mat <- cor(df_vals, use = "pairwise.complete.obs")
 
-# 5. Convertimos la matriz a formato “largo” para ggplot2
+# 5. Formato “largo” y filtrado para area_total.x
 cor_df <- as.data.frame(cor_mat) %>%
-  tibble::rownames_to_column("var1") %>%    # lleva los nombres de fila a columna
+  tibble::rownames_to_column("var1") %>%
   pivot_longer(
     cols      = -var1,
     names_to  = "var2",
     values_to = "corr"
-  )
+  ) %>%
+  # Solo mantener las correlaciones de area_total.x
+  filter(var1 == "area_total.x" & var2 != "area_total.x")
 
-# 6. Dibujamos el heatmap
-ggplot(cor_df, aes(x = var1, y = var2, fill = corr)) +
-  geom_tile(color = "white") +
+# 6. Gráfico de barras de correlaciones
+ggplot(cor_df, aes(x = var2, y = corr, fill = corr)) +
+  geom_col() +
   scale_fill_gradient2(
     low      = "blue",
     mid      = "white",
@@ -353,13 +342,45 @@ ggplot(cor_df, aes(x = var1, y = var2, fill = corr)) +
     limits   = c(-1, 1),
     name     = "ρ"
   ) +
-  geom_text(aes(label = sprintf("%.2f", corr)), size = 3) +
+  geom_text(aes(label = sprintf("%.2f", corr)), vjust = ifelse(cor_df$corr>0, -0.5, 1.5)) +
   theme_minimal(base_size = 14) +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     axis.title  = element_blank()
   ) +
-  labs(title = "Heatmap de correlaciones: Área verde vs. contaminantes")
+  labs(title = "Correlación de area_total.x con contaminantes")
 
+```
+
+
+```{r}
+df_vals <- zverdes_contaminantes %>%
+  st_set_geometry(NULL) %>%
+  select(area_total.x, NO2, NOx, NO, SO2, PM10, `PM2.5`, O3)
+
+# 2. Definimos el vector de contaminantes
+contaminantes <- c("NO2","NOx","NO","SO2","PM10","PM2.5","O3")
+
+# 3. Correlaciones y tests en bucle
+resumen_cor <- lapply(contaminantes, function(var) {
+  test <- cor.test(df_vals$area_total.x, df_vals[[var]], method = "pearson")
+  # tidy() de broom convierte el resultado en data.frame
+  broom::tidy(test) %>%
+    select(estimate, p.value, parameter) %>%
+    mutate(
+      contaminante = var,
+      n            = parameter + 2,
+      signif      = if_else(p.value < 0.05, "p<0.05", "n.s.")
+    ) %>%
+    rename(
+      r    = estimate,
+      df   = parameter
+    )
+}) %>%
+  bind_rows() %>%
+  select(contaminante, n, df, r, p.value, signif) %>%
+  arrange(desc(abs(r)))
+
+print(resumen_cor)
 ```
 
