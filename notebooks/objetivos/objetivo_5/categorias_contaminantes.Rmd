@@ -61,6 +61,14 @@ labelso3 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
 ```
 
 ```{r}
+mode_val <- function(x){
+  ux <- na.omit(unique(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
+```
+
+
+```{r}
 df_categorias <- df %>%
     mutate(
     PM10_cat = cut(PM10, breaks = breaks_pm10, labels = labels_pm10, right = FALSE),
@@ -70,6 +78,17 @@ df_categorias <- df %>%
     NO2_cat  = cut(NO2,  breaks = breaks_no2,  labels = labels_no2,  right = FALSE),
     NOx_cat  = cut(NOx,  breaks = breaks_nox,  labels = labels_nox,  right = FALSE),
     O3_cat   = cut(O3,   breaks = breaks_o3,   labels = labelso3,    right = FALSE)
+  ) %>%
+  group_by(FechaHora, hora) %>%
+  summarise(
+    PM10_cat   = mode_val(PM10_cat),
+    `PM2.5_cat` = mode_val(`PM2.5_cat`),
+    SO2_cat    = mode_val(SO2_cat),
+    NO_cat     = mode_val(NO_cat),
+    NO2_cat    = mode_val(NO2_cat),
+    NOx_cat    = mode_val(NOx_cat),
+    O3_cat     = mode_val(O3_cat),
+    .groups = "drop"
   ) %>%
   fastDummies::dummy_cols(
     select_columns         = c("PM10_cat","PM2.5_cat","SO2_cat",
@@ -87,7 +106,7 @@ head(df_categorias)
 ```
 
 ```{r}
-write.csv(df_categorias, file = "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/notebooks/objetivos/objetivo_5/categorias_contaminantes.csv", row.names = FALSE)
+write.csv(df_categorias, file = "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/data/cleaned/calidad_aire/categorias_contaminantes.csv", row.names = FALSE)
 ```
 
 

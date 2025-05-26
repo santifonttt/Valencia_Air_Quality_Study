@@ -1,8 +1,8 @@
 ---
-title: "Untitled"
+title: "Estudio Contaminantes Conjunto"
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 date: "2025-05-21"
 ---
 
@@ -103,6 +103,11 @@ df <- df %>%
 ```{r}
 miss_var_summary(df)
 ```
+
+```{r}
+unique(df$Origen)
+```
+
 
 Al eliminar esas estaciones la cantidad de faltantes disminuye considerablemente ya que las estacioness restantes miden todas las variables.
 
@@ -315,13 +320,15 @@ Observamos una muy ligera disminución, pero muy insignificante. Podemos conclui
 Para ver patrones entre contaminantes vamos a realizar, en primer lugar, un PCA. Dado que hemos imputado los faltantes, podemos usar cualquier modelo del PCA.
 
 ```{r}
-set.seed(100)
-df_pca_20k <- datos_limpios %>%
-  filter(year(FechaHora) == 2023) %>%
-  sample_n(20000) %>%
-  select(Origen, NO, NO2, NOx, O3, PM10, `PM2.5`, SO2)
+# Creamos el df que usaremos en el PCA con las variables que nos interesan
 
-res.pca <- PCA(df_pca_20k, 
+df_pca <- datos_limpios %>% select(Origen, NO, NO2, NOx, O3, PM10, `PM2.5`, SO2)
+```
+
+
+```{r}
+set.seed(100)
+res.pca <- PCA(df_pca, 
                scale.unit = TRUE, 
                ncp = 10, 
                graph = FALSE, 
@@ -432,7 +439,7 @@ fviz_pca_biplot(
   )
 ```
 
-Como habiamos visto, la variable $SO2$ tiene un loading alto en la dimensión 3, por lo que explica bastante la variailidad en esa componente.
+Como habiamos visto, la variable $SO2$ tiene un loading alto en la dimensión 3, por lo que explica bastante la variailidad en esa componente. En este caso, podemos observar que todos los contaminantes estan correlacionados positivamente entre sí excepto el contaminante $O3$ que esta inversamente correlacionadas.
 
 Ahora vamos a añadir los puntos de origen.
 
@@ -448,6 +455,8 @@ fviz_pca_biplot(
   label = "var"
 )
 ```
+
+Se observa que las zonas con combustion de vehiculos pesados (barcos, camiones, aviones,...) tienen valores mas elevados de NOs.
 
 Se ve que los puntos están muy concentrados, pero con ligeras diferencias. 
 
@@ -465,9 +474,8 @@ Vamos a hacer ahora el PCA agrupando las estaciones por su localización geográ
 
 
 ```{r}
+set.seed(100)
 df_pca_grp <- datos_limpios %>%
-  filter(year(FechaHora) == 2023) %>%
-  sample_n(20000) %>%
   mutate(
     Grupo = case_when(
       Origen %in% c(
@@ -523,8 +531,8 @@ fviz_pca_biplot(
 
 Parece ser que:
 
-- La CP1 explica la combustión de fosiles, como tráfico, puerto,....
-- La CP2 parece explicar algo de meteorología
+- La CP1 explica la combustión de fosiles, como tráfico, puerto,.... ya que se agrupan los contaminantes producidos por la combustión.
+- La CP2 parece explicar algo de meteorología ya que se agrupan las variables que varian más con las estaciones del año.
 - La CP3 no le vemos explicación.
 
 Vamos a validar el modelo.
@@ -533,15 +541,15 @@ Vamos a validar el modelo.
 set.seed(100)
 K <- 3
 
-res.pca <- PCA(df_pca_20k, 
+res.pca <- PCA(df_pca, 
                scale.unit = TRUE, 
                graph = FALSE, 
                ncp = K, 
-               quali.sup = which(names(df_pca_20k) == "Origen"))
+               quali.sup = which(names(df_pca) == "Origen"))
 
 misScores = res.pca$ind$coord[,1:K]
 miT2 = colSums(t(misScores**2)/eig.val[1:K,1])
-I = nrow(df_pca_20k)
+I = nrow(df_pca)
 F95 = K*(I**2 - 1)/(I*(I - K)) * qf(0.95, K, I-K)
 F99 = K*(I**2 - 1)/(I*(I - K)) * qf(0.99, K, I-K)
 
@@ -581,7 +589,7 @@ df_sta <- datos_limpios %>%
 df_scaled <- scale(df_sta)
 
 # Convertir matriz a data frame antes de usar sample_n
-vars_sample <- as.data.frame(df_scaled) %>% sample_n(200, replace = TRUE)
+vars_sample <- as.data.frame(df_scaled) %>% sample_n(2000, replace = TRUE)
 
 # Calcular la matriz de distancias (opcional: usar scale() si hace falta)
 midist <- get_dist(scale(vars_sample), method = "euclidean")
@@ -624,7 +632,9 @@ fviz_nbclust(
   nstart     = 25
 ) +
   labs(subtitle = "Elbow method: within‐cluster sum of squares")
+```
 
+```{r}
 # 4b) Silhouette method
 fviz_nbclust(
   df_scaled,
@@ -634,12 +644,16 @@ fviz_nbclust(
   nstart     = 25
 ) +
   labs(subtitle = "Silhouette method: average silhouette width")
+```
 
+Segun el gráfico de elbow y el de silhouette, parece que el número óptimo de clusters es 3. 
+
+```{r}
 # 5) Clustering jerárquico (distancia Euclídea + Ward)
 dist_mat <- dist(df_scaled, method = "euclidean")
 hc       <- hclust(dist_mat,    method = "ward.D2")
 
-# 6) Elegir k (por ejemplo 3, según los gráficos anteriores)
+# 6) Elegir k 
 k_opt <- 3
 
 # 7) Cortar el árbol y extraer clusters
@@ -680,7 +694,9 @@ pheatmap(
   show_rownames              = FALSE,
   show_colnames              = FALSE
 )
+```
 
+```{r}
 # 11) Proyección PCA coloreada por cluster
 fviz_cluster(
   list(data    = df_scaled,
@@ -724,5 +740,6 @@ station_clusters_df
 ```
 
 Aqui vemos en que clusters se ha asignado cada estación de medición.
+
 
 

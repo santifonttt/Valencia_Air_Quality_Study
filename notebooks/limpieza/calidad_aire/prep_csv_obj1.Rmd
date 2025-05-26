@@ -1,5 +1,5 @@
 ---
-title: "Estudio de los contaminantes"
+title: "Preparación base de datos de contaminantes"
 output: html_document
 date: "2025-05-16"
 ---
@@ -20,11 +20,10 @@ library(stringr)
 
 
 ```{r}
-df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/Analisis_aire/data/raw/calidad_aire/Base_Datos_filtradas_desde_2019/conjunto_estaciones.csv", stringsAsFactors = FALSE)
+df <- read.csv("~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/estaciones_merged/filtrados/final/datos_final.csv", stringsAsFactors = FALSE)
 ```
 
 ### En este estudio vamos a analizar los contaminantes de la base de datos por zonas y años
-
 
 Primero de todo, vamos a ver que variables tenemos en la base de datos.
 
@@ -94,7 +93,7 @@ Podemos observar que la variable `H.Rel.` tiene un 100% de faltantes lo cual nos
 
 ```{r}
 df1 <- df1 %>%
-  select(
+  dplyr::select(
     where(~ mean(is.na(.x)) <= 0.9)
   )
 
@@ -448,5 +447,5 @@ cat("Variables medidas en algunos años pero no en todos:",
 En este caso, en 2021 se empezó a medir `Velocidad`, `Direccion_viento`, `Temperatura`, `Presion`, `Radiacion_solar`, `Precipitacion` y `Velocidad_maxima`, por lo que en 2020 no se midieron.
 
 ```{r}
-write.csv(df1, file = "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/base_para_obj1.csv", row.names = FALSE)
+#write.csv(df1, file = "~/Documents/Drive/UPV/Segundo/2ºCuatri/Proyecto/base_para_obj1.csv", row.names = FALSE)
 ```
