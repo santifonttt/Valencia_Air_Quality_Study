@@ -1,14 +1,20 @@
 ---
 title: "Mapas de calor de los contaminantes y zonas finales"
-output: html_document
-date: "2025-05-22"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+  pdf_document: default
+date: "2025-05-21"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+```{r warning=FALSE}
 library(dplyr)
 library(readr)
 library(sf)

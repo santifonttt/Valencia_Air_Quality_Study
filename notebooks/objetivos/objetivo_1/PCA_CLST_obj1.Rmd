@@ -1,7 +1,11 @@
 ---
 title: "Estudio Contaminantes Conjunto"
 output:
-  html_document: default
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
   pdf_document: default
 date: "2025-05-21"
 ---
@@ -10,7 +14,7 @@ date: "2025-05-21"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 library(dplyr)
 library(tidyr)
 library(ggplot2)
@@ -344,18 +348,20 @@ Observamos que la CP1 explica un 50.5% de la variabilidad, la CP2 explica un 17.
 
 ```{r}
 set.seed(100)
+
 fviz_pca_biplot(
   res.pca,
   axes        = c(1, 2),    
-  habillage   = "Origen",
-  addEllipses = FALSE,
-  repel       = TRUE,
-  label       = "var",
-  invisible   = "ind",       
-  pointsize   = 1.5
+  habillage   = "Origen",      
+  repel       = TRUE,          
+  label       = "var",         
+  invisible   = "ind",         
+  pointsize   = 1.5,           
+  col.var     = "contrib",   
+  gradient.cols = c("lightblue", "blue", "darkblue") 
 ) +
   labs(
-    title = "PCA Biplot: Dim1 vs Dim2",
+    title = "PCA Biplot: Dim1 vs Dim2"
   )
 ```
 
