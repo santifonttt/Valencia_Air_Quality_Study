@@ -1,0 +1,171 @@
+---
+title: "transformacion_en_discretas"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(arules, warn.conflicts = FALSE)
+library(arulesSequences, warn.conflicts = FALSE)
+library(dplyr, warn.conflicts = FALSE)
+library(tidyr, warn.conflicts = FALSE)
+library(lubridate, warn.conflicts = FALSE)
+library(fastDummies, warn.conflicts = FALSE)
+```
+
+# Pivotar Contaminantes
+
+```{r}
+df_cont_inicial <- read.csv("../../../data/cleaned/calidad_aire/Calidad_Aire_limpio.csv", stringsAsFactors = FALSE)
+
+df_cont_inicial <- df_cont_orig %>%
+  mutate(
+    FechaHora = as.POSIXct(FechaHora, format = "%Y-%m-%d %H:%M:%S", tz = "Europe/Madrid"),
+    hora     = hour(FechaHora)
+  )
+```
+
+```{r}
+colnames(df_cont_inicial)
+```
+
+```{r}
+contaminantes <- c('PM10', 'PM2.5', 'NO', 'NO2', 'NOx', 'SO2', 'O3')
+```
+
+## Definir Rangos de la OMS
+
+```{r}
+breaks_pm10 <- c(-Inf, 54, 154, 354, 424, Inf)
+labels_pm10 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_pm25 <- c(-Inf, 9, 35, 125, 225, Inf)
+labels_pm25 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_so2 <- c(-Inf, 35, 75, 185, 304, Inf)
+labels_so2 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_no <- c(-Inf, 53, 100, 360, 649, Inf)
+labels_no <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_no2 <- c(-Inf, 53, 100, 360, 649, Inf)
+labels_no2 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_nox <- c(-Inf, 30, 60, 120, 240, Inf)
+labels_nox <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+
+breaks_o3 <- c(-Inf, 54, 70, 85, 105, Inf)
+labelso3 <- c("Bueno", "Moderado", "Insalubre", "Muy Insalubre", "Peligroso")
+```
+
+
+## Crear intervalos de contaminantes y discretizarlos
+
+```{r}
+df_categorias <- df_cont_inicial %>%
+    mutate(
+    PM10_cat = cut(PM10, breaks = breaks_pm10, labels = labels_pm10, right = FALSE),
+    PM2.5_cat = cut(PM2.5, breaks = breaks_pm25, labels = labels_pm25, right = FALSE),
+    SO2_cat  = cut(SO2,  breaks = breaks_so2,  labels = labels_so2,  right = FALSE),
+    NO_cat   = cut(NO,   breaks = breaks_no,   labels = labels_no,   right = FALSE),
+    NO2_cat  = cut(NO2,  breaks = breaks_no2,  labels = labels_no2,  right = FALSE),
+    NOx_cat  = cut(NOx,  breaks = breaks_nox,  labels = labels_nox,  right = FALSE),
+    O3_cat   = cut(O3,   breaks = breaks_o3,   labels = labelso3,    right = FALSE)
+  ) %>%
+  fastDummies::dummy_cols(
+    select_columns         = c("PM10_cat","PM2.5_cat","SO2_cat",
+                               "NO_cat","NO2_cat","NOx_cat","O3_cat"),
+    remove_selected_columns = TRUE,
+    remove_first_dummy      = FALSE
+  ) %>%
+  dplyr::select(FechaHora, hora, starts_with("PM10_cat_"), starts_with("PM2.5_cat_"),
+         starts_with("SO2_cat_"),  starts_with("NO_cat_"),
+         starts_with("NO2_cat_"),  starts_with("NOx_cat_"),
+         starts_with("O3_cat_"))
+
+head(df_categorias)
+```
+
+```{r}
+write.csv(df_categorias, file = "../../../data/cleaned/calidad_aire/categorias_contaminantes.csv", row.names = FALSE)
+```
+
+
+# Pivotar Meteorología
+
+```{r}
+df_meteo_inicial <- read.csv("../../../data/cleaned/meteorologia/meteorología_horaria_limpio.csv")
+
+df_meteo_inicial <- df_meteo_inicial %>%
+  mutate(
+    Fecha = as.POSIXct(Fecha, tz = "Europe/Madrid"),
+    hora  = as.integer(hora)
+  )
+```
+
+```{r}
+df_meteo_categorias <- df_meteo_inicial %>%
+  mutate(
+    Temp_cat = cut(Temperatura,
+                   breaks = c(-Inf, 5, 15, 25, 35, Inf),
+                   labels = c("muy_frio", "frio", "templado", "calido", "muy_calido"),
+                   right  = FALSE),
+    Precip_cat = cut(`Precipitaciones ( mm)`,
+                   breaks = c(-Inf, 0, 2, 5, 10, Inf),
+                   labels = c("sin_lluvia", "lluvia_ligera", "moderada", "fuerte", "extrema"),
+                   right  = FALSE),
+    Hum_cat = cut(`Humedad (%)`,
+                   breaks = c(-Inf, 30, 60, 90, Inf),
+                   labels = c("muy_baja", "media", "alta", "muy_alta"),
+                   right  = FALSE),
+    Viento_cat = cut(`Velocidad del viento (Km/h)`,
+                   breaks = c(-Inf, 5, 15, 30, 50, Inf),
+                   labels = c("calma", "flojo", "moderado", "fuerte", "temporal"),
+                   right  = FALSE),
+    Rafaga_cat = cut(`Ráfaga de viento (Km/h)`,
+                   breaks = c(-Inf, 10, 25, 50, 75, Inf),
+                   labels = c("calma", "floja", "moderada", "fuerte", "temporal"),
+                   right  = FALSE),
+    Rumbo_cat = cut(`Ángulo del viento (°)`,
+                   breaks  = seq(0, 360, by = 45),
+                   include.lowest = TRUE,
+                   labels  = c("N", "NE", "E", "SE", "S", "SW", "W", "NW")),
+    Nubo_cat = cut(`Nubosidad (%)`,
+                   breaks = c(-Inf, 10, 50, 90, Inf),
+                   labels = c("despejado", "parcial", "nuboso", "cubierto"),
+                   right  = FALSE),
+    Visib_cat = cut(`Visibilidad ( Km)`,
+                   breaks = c(-Inf, 2, 5, 10, Inf),
+                   labels = c("mala", "media", "buena", "excelente"),
+                   right  = FALSE)
+  )
+```
+
+```{r}
+num_to_remove <- c("Temperatura", "Precipitaciones ( mm)", "Humedad (%)",
+                   "Velocidad del viento (Km/h)", "Ráfaga de viento (Km/h)",
+                   "Ángulo del viento (°)", "Nubosidad (%)", "Visibilidad ( Km)")
+
+df_meteo_categorias <- df_meteo_categorias %>%
+  select(-all_of(num_to_remove))
+```
+
+```{r}
+df_dummies <- dummy_cols(
+  df_meteo_categorias,
+  select_columns = c("Temp_cat", "Precip_cat", "Hum_cat", "Viento_cat",
+                     "Rafaga_cat", "Rumbo_cat", "Nubo_cat",
+                     "Visib_cat", "Tiempo", "Dirección del viento"),
+  remove_selected_columns = TRUE,
+  remove_first_dummy      = FALSE
+)
+```
+
+```{r}
+write.csv(df_dummies, "../../../data/cleaned/meteorologia/meteorologia_horaria_intervalos.csv")
+```
+

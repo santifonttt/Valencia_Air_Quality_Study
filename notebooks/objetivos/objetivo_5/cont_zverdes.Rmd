@@ -1,0 +1,386 @@
+---
+title: "cont_zverdes"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r warning=FALSE}
+library(dplyr, warn.conflicts = FALSE)
+library(tidyr, warn.conflicts = FALSE)
+library(arrow, warn.conflicts = FALSE)
+library(leaflet, warn.conflicts = FALSE)
+library(sf, warn.conflicts = FALSE)
+library(RColorBrewer, warn.conflicts = FALSE)
+library(htmltools, warn.conflicts = FALSE)
+library(ggplot2, warn.conflicts = FALSE)
+library(scales, warn.conflicts = FALSE)
+```
+
+```{r}
+z_verdes = read_parquet("../../../data/cleaned/zonas_verdes/espacios_verdes_limpio.parquet")
+```
+
+# Cruze de Zonas Verdes y Contaminantes
+
+## Pivotación de Zonas Verdes
+
+Vamos a agrupar por distritos municipales y sumar las áreas de las zonas verdes.
+
+Antes de hacer eso, hay un distrito ficticio que es el cauce del río Turia. Como tenemos la localización de las zonas, podemos reclasificarlo en el distrito real que corresponda, dependiendo de las coordenadas.
+
+```{r}
+z_verdes %>% filter(Distrito_Municipal == "CAUCE DEL TURIA")
+```
+
+Como solo hay 15 zonas verdes en el cauce del Turia, podemos hacer una reclasificación manual.
+
+```{r}
+z_verdes_2 <- z_verdes %>%
+  mutate(
+    Distrito_Municipal = case_when(
+      OBJECTID == 1257 ~ "PLA DEL REIAL",
+      OBJECTID == 1570 ~ "CAMINS AL GRAU",
+      OBJECTID == 1728 ~ "CAMINS AL GRAU",
+      OBJECTID == 1214 ~ "SAIDIA",
+      OBJECTID == 1233 ~ "OLIVERETA",
+      OBJECTID == 1305 ~ "CIUTAT VELLA",
+      OBJECTID == 1494 ~ "POBLATS MARITIMS",
+      OBJECTID == 1493 ~ "PLA DEL REIAL",
+      OBJECTID == 1709 ~ "QUATRE CARRERES",
+      OBJECTID == 1195 ~ "EXTRAMURS",
+      OBJECTID == 1288 ~ "EXTRAMURS",
+      OBJECTID == 1295 ~ "OLIVERETA",
+      OBJECTID == 1471 ~ "SAIDIA",
+      OBJECTID == 1508 ~ "SAIDIA",
+      OBJECTID == 1799 ~ "PLA DEL REIAL",
+      TRUE ~ Distrito_Municipal  # Mantener el valor original si no coincide con ningún OBJECTID
+    )
+    )
+```
+
+
+```{r}
+z_verdes_distritos <- z_verdes_2 %>%
+  group_by(Distrito_Municipal) %>%
+  summarise(area_total = sum(Area)) %>%
+  ungroup()
+```
+
+```{r}
+distritos_sf <- st_read("../../../data/cleaned/geoespacial/districtes-distritos.geojson", quiet = TRUE)
+```
+
+Hay que cambiar el nombre de algunos distritos municipales para que coincida con el nombre en distritos_sf.
+
+```{r}
+z_verdes_distritos_2 <- z_verdes_distritos %>%
+  mutate(
+    Distrito_Municipal = dplyr::recode(
+      Distrito_Municipal,
+      "POBLATS DE L`OEST" = "POBLATS DE L'OEST",
+      "OLIVERETA" = "L'OLIVERETA",
+      "SAIDIA" = "LA SAIDIA",
+      "PLA DEL REIAL" = "EL PLA DEL REAL", 
+      "L´EIXAMPLA" = "L'EIXAMPLE",
+      "POBLES DEL SUD" = "POBLATS DEL SUD"
+    )
+  )
+```
+
+También hay que dejar una sola fila de "POBLATS DEL NORD" en distritos_sf, porque hay tres filas con el mismo nombre.
+
+```{r}
+distritos_sf <- distritos_sf %>%
+  filter(!(objectid %in% c(217, 199)))
+```
+
+
+```{r}
+distritos_sf <- distritos_sf %>%
+  left_join(z_verdes_distritos_2, by = c("nombre" = "Distrito_Municipal"))
+```
+
+
+# Creación del choroplete
+
+```{r}
+pal <- colorNumeric(
+  palette = "YlGnBu",              
+  domain  = distritos_sf$area_total,
+  na.color = "transparent"
+)
+```
+
+```{r warning=FALSE}
+leaflet(distritos_sf) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  
+  addPolygons(
+    fillColor    = ~pal(area_total),
+    weight       = 1,
+    opacity      = 1,
+    color        = "white",
+    dashArray    = "3",
+    fillOpacity  = 0.7,
+    
+    highlightOptions = highlightOptions(
+      weight       = 3,
+      color        = "#666",
+      dashArray    = "",
+      fillOpacity  = 0.9,
+      bringToFront = TRUE
+    ),
+    
+    label = ~paste0(
+      "<strong>", nombre, "</strong><br/>",
+      "Superficie parques: ", 
+      formatC(area_total, big.mark = ".", format = "d"), " m²"
+    ) %>% lapply(htmltools::HTML),
+    labelOptions = labelOptions(
+      style    = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "13px",
+      direction= "auto"
+    )
+  ) %>%
+  
+  addLegend(
+    pal      = pal,
+    values   = ~area_total,
+    opacity  = 0.7,
+    title    = "m² parques",
+    position = "bottomright"
+  )
+```
+
+
+```{r}
+contaminantes = read_parquet("../../../data/cleaned/calidad_aire/conjunto_estaciones_limpio.parquet")
+contaminantes
+```
+
+
+```{r}
+contaminantes = contaminantes %>%
+  mutate(
+    FechaHora = as.POSIXct(
+      FechaHora,
+      format = "%Y-%m-%d %H:%M:%S",
+      tz     = "Europe/Madrid"
+    )
+  )
+
+codigos = read.csv("../../../data/cleaned/geoespacial/codigos.csv")
+```
+
+
+```{r}
+```
+
+```{r}
+contaminantes_23 <- contaminantes %>%
+  filter(year(FechaHora) == 2023) 
+```
+
+
+```{r}
+contaminantes_23 <- contaminantes_23 %>%
+  mutate(
+    Origen = dplyr::recode(
+      Origen,
+      "Massanassa_UM" = "Massanassa",
+    )
+  )
+```
+
+
+```{r}
+zonas_sel <- c("Massanassa", "Quart de Poblet", "Sedavi UM",
+               "Torrent-El Vedat", "València - Av. França",
+               "València - Molí del Sol", "València - Pista de Silla",
+               "València - Politècnic", "València Port llit antic Túria",
+               "València Port Moll Trans. Ponent")
+```
+
+```{r}
+contaminantes_23_cp = contaminantes_23 %>%
+  filter(Origen %in% zonas_sel) %>%
+  left_join(codigos, by = c("Origen" = "Origen")) %>%
+  group_by(COD_POSTAL) %>%
+  summarise(
+    PM10  = mean(PM10,  na.rm = TRUE),
+    PM2.5 = mean(PM2.5, na.rm = TRUE),
+    SO2 = mean(SO2, na.rm = TRUE),
+    NO = mean(NO, na.rm = TRUE),
+    NO2 = mean(NO2, na.rm = TRUE),
+    NOx = mean(NOx, na.rm = TRUE),
+    O3 = mean(O3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+
+```{r}
+# Eliminar filas cuyo COD_POSTAL sea 46901 y 46930
+
+contaminantes_23_dist = contaminantes_23_cp %>%
+  filter(!(COD_POSTAL %in% c(46901, 46930))) %>%
+  mutate(
+    distrito = case_when(
+      COD_POSTAL == 46001                  ~ "CIUTAT VELLA",
+      COD_POSTAL %in% c(46015, 46023)      ~ "CAMPANAR",
+      COD_POSTAL == 46022                  ~ "AYORA",
+      COD_POSTAL == 46024                  ~ "QUATRE CARRERES"
+    )
+  )
+```
+
+Ya podemos crear el choroplete de contaminantes por distrito.
+
+```{r}
+contaminantes_23_dist = distritos_sf %>% 
+  left_join(contaminantes_23_dist, by = c("nombre" = "distrito"))
+```
+
+```{r}
+# vector de contaminantes
+pollutants <- c("NO2", "NOx", "NO", "SO2", "PM10", "PM2.5", "O3")
+
+for (pol in pollutants) {
+  
+  # 1) extraemos los valores
+  vals   <- contaminantes_23_dist[[pol]]
+  names  <- contaminantes_23_dist$nombre
+  
+  # 2) paleta y colores pre-calculados
+  pal    <- colorNumeric("YlOrRd", domain = vals, na.color = "transparent")
+  cols   <- pal(vals)
+  
+  # 3) etiquetas HTML pre-calculadas
+  labs <- sprintf(
+    "<strong>%s</strong><br/>%s: %.2f",
+    names, pol, vals
+  ) %>% 
+    lapply(HTML)
+  
+  # 4) construimos el mapa
+  m <- leaflet(contaminantes_23_dist) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addPolygons(
+      fillColor       = cols,
+      weight          = 1,
+      color           = "white",
+      dashArray       = "3",
+      fillOpacity     = 0.7,
+      highlightOptions = highlightOptions(
+        weight        = 3,
+        color         = "#666",
+        fillOpacity   = 0.9,
+        bringToFront  = TRUE
+      ),
+      label           = labs,
+      labelOptions    = labelOptions(
+        style     = list("font-weight" = "normal", padding = "3px 8px"),
+        textsize  = "13px",
+        direction = "auto"
+      )
+    ) %>%
+    addLegend(
+      pal      = pal,
+      values   = vals,
+      opacity  = 0.7,
+      title    = pol,
+      position = "bottomright"
+    )
+  
+  print(m)
+}
+
+```
+
+
+```{r}
+zverdes_contaminantes <- distritos_sf %>%
+  left_join(
+    contaminantes_23_dist %>% st_set_geometry(NULL),  # quitamos geometría duplicada
+    by = "nombre"
+  )
+```
+
+
+
+```{r}
+df_vals <- zverdes_contaminantes %>%
+  st_set_geometry(NULL) %>%
+  select(area_total.x, NO2, NOx, NO, SO2, PM10, `PM2.5`, O3)
+
+# 4. Matriz de correlaciones
+cor_mat <- cor(df_vals, use = "pairwise.complete.obs")
+
+# 5. Formato “largo” y filtrado para area_total.x
+cor_df <- as.data.frame(cor_mat) %>%
+  tibble::rownames_to_column("var1") %>%
+  pivot_longer(
+    cols      = -var1,
+    names_to  = "var2",
+    values_to = "corr"
+  ) %>%
+  # Solo mantener las correlaciones de area_total.x
+  filter(var1 == "area_total.x" & var2 != "area_total.x")
+
+# 6. Gráfico de barras de correlaciones
+ggplot(cor_df, aes(x = var2, y = corr, fill = corr)) +
+  geom_col() +
+  scale_fill_gradient2(
+    low      = "blue",
+    mid      = "white",
+    high     = "red",
+    midpoint = 0,
+    limits   = c(-1, 1),
+    name     = "ρ"
+  ) +
+  geom_text(aes(label = sprintf("%.2f", corr)), vjust = ifelse(cor_df$corr>0, -0.5, 1.5)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title  = element_blank()
+  ) +
+  labs(title = "Correlación de area_total.x con contaminantes")
+
+```
+
+
+```{r}
+df_vals <- zverdes_contaminantes %>%
+  st_set_geometry(NULL) %>%
+  select(area_total.x, NO2, NOx, NO, SO2, PM10, `PM2.5`, O3)
+
+# 2. Definimos el vector de contaminantes
+contaminantes <- c("NO2","NOx","NO","SO2","PM10","PM2.5","O3")
+
+# 3. Correlaciones y tests en bucle
+resumen_cor <- lapply(contaminantes, function(var) {
+  test <- cor.test(df_vals$area_total.x, df_vals[[var]], method = "pearson")
+  # tidy() de broom convierte el resultado en data.frame
+  broom::tidy(test) %>%
+    select(estimate, p.value, parameter) %>%
+    mutate(
+      contaminante = var,
+      n            = parameter + 2,
+      signif      = if_else(p.value < 0.05, "p<0.05", "n.s.")
+    ) %>%
+    rename(
+      r    = estimate,
+      df   = parameter
+    )
+}) %>%
+  bind_rows() %>%
+  select(contaminante, n, df, r, p.value, signif) %>%
+  arrange(desc(abs(r)))
+
+print(resumen_cor)
+```
+

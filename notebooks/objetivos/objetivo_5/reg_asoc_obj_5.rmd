@@ -1,0 +1,236 @@
+---
+title: "Patrones entre factores"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-05-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(arules, warn.conflicts = FALSE)
+library(arulesSequences, warn.conflicts = FALSE)
+library(dplyr, warn.conflicts = FALSE)
+library(tidyr, warn.conflicts = FALSE)
+library(lubridate, warn.conflicts = FALSE)
+```
+
+# Cruce de bases de datos
+
+## Contaminantes con Meteorología
+
+```{r}
+df_meteo <- read.csv("../../../data/cleaned/meteorologia/meteorologia_horaria_intervalos.csv", stringsAsFactors = FALSE)
+df_cont  <- read.csv("../../../data/cleaned/calidad_aire/categorias_contaminantes.csv", stringsAsFactors = FALSE)
+```
+
+
+```{r}
+# Filtrado 2023 y creación de 'fecha' y 'hora'
+df_meteo_23 <- df_meteo %>%
+  mutate(fecha = as.Date(fecha)) %>%
+  filter(year(fecha) == 2023)
+
+df_cont_23 <- df_cont %>%
+  mutate(
+    FechaHora = ymd_hms(FechaHora),
+    fecha     = as.Date(FechaHora),
+    hora      = hour(FechaHora)
+  ) %>%
+  filter(year(fecha) == 2023) %>%
+  select(-FechaHora)
+```
+
+
+Vamos a eliminar las columnas cuyo valor máximo sea 0, ya que no aportan información y así será más eficiente el algoritmo apriori para calcular las reglas.
+
+```{r}
+df_cont_23 <- df_cont_23  %>%
+  select(where(~ max(.) > 0))
+
+df_meteo_23 <- df_meteo_23 %>%
+  select(where(~ max(.) > 0))
+
+summary(df_cont_23$hora)
+```
+
+
+```{r}
+# Eliminar las filas de df_meteo en las que hora == 0
+df_meteo_23 <- df_meteo_23 %>%
+  filter(hora != 0)
+
+# Unión inner por fecha y hora
+df_met_cont <- inner_join(df_cont_23, df_meteo_23, by = c("fecha","hora"))
+```
+
+```{r}
+# Eliminar filas repetidas
+df_met_cont = df_met_cont %>%
+  distinct(fecha, hora, .keep_all = TRUE)
+```
+
+
+# Reglas de asociación
+
+## Contaminantes con meteorología
+
+En primer lugar vamos a eliminar las variables fecha y hora, ya que no son relevantes para las reglas de asociación.
+
+```{r}
+df_met_cont_2 <- df_met_cont %>%
+  select(-fecha, -hora)
+```
+
+
+Ahora comprobaremos que no haya columnas con un único valor.
+
+```{r}
+uniqs <- sapply(df_met_cont_2, function(x) length(unique(x)))
+uniqs
+df_met_cont_2 <- df_met_cont_2[, uniqs > 1]
+```
+
+Ahora pasamos a categóricas las variables que van a ser el consecuente. Estas son:
+
+- $NO_2$
+- $NO$
+- $NO_x$
+- $O_3$
+- $PM_{2.5}$
+- $PM_{10}$
+
+```{r}
+df_met_cont_2[,1:22] = lapply(df_met_cont_2[,1:22], as.factor)
+```
+
+
+El resto de variables, que serán el antecendente, las convertiremos a varaibles lógicas.
+
+```{r}
+df_met_cont_2[,23:ncol(df_met_cont_2)] = df_met_cont_2[,23:ncol(df_met_cont_2)] == 1
+```
+
+
+```{r}
+antecedentes = names(df_met_cont_2)[23:ncol(df_met_cont_2)]
+nombres_consecuentes = names(df_met_cont_2)[1:22]
+```
+
+### Todos los contaminantes
+
+Vamos a buscar en primer lugar, patrones entre todos los contaminantes y las variables meteorológicas.
+
+```{r}
+crear_consecuentes = function(nombres) {paste0(nombres, "=1")}
+consecuentes = crear_consecuentes(nombres_consecuentes)
+```
+
+
+Ya podemos crear las reglas de asociación
+
+```{r}
+reglas = apriori(
+  df_met_cont_2, parameter = list(support = 0.05, confidence = 0.8, minlen=2),
+  appearance = list(lhs = antecedentes, rhs = consecuentes)
+)
+```
+
+```{r}
+reglas2 = reglas[!is.redundant(x = reglas, measure = "confidence")]
+
+filtradas = arules::subset(reglas2, subset = lift > 1.1)
+```
+
+```{r}
+inspect(sort(filtradas, by = "confidence"))
+```
+
+Vamos a filtrar las reglas por contaminantes
+
+### PM2.5
+
+```{r}
+filtradas_pm25_bueno = arules::subset(filtradas, subset = rhs %in% "PM2.5_cat_Bueno=1")
+inspect(sort(filtradas_pm25_bueno, by = "confidence"))
+```
+
+Vemos que de forma general, *el 80% de las veces que hay ráfagas de viento superiores a 30 km/h*, el PM2.5 es bueno.
+
+```{r}
+filtradas_pm25_moderado = arules::subset(filtradas, subset = rhs %in% "PM2.5_cat_Moderado=1")
+# Filtrar para dejar solo las maximales
+maximales_pm25_moderado = is.maximal(filtradas_pm25_moderado)
+inspect(sort(filtradas_pm25_moderado[maximales_pm25_moderado]))
+```
+
+También se observa que más del 80% de las veces que el PM2.5 es moderado, *la temperatura es entre 20ºC y 30ºC, la humedad está entre el 60% y 90% y las ráfagas de viento son inferiores a 15 km/h*.
+
+Como en el 2023 no se han registrado casos de PM2.5 peligroso, y las ocasiones en las que ha sido insalubre o muy insalubre son muy escasas, no se han encontrado reglas de asociación para estas categorías.
+
+
+### PM10
+
+Para los PM10 no se han encontrado patrones de asociación relevantes. Quizás sea porque al ser más grande, no le afecte tanto las condiciones meteorológicas.
+
+### NOx
+
+```{r}
+filtradas_NOx_bueno = arules::subset(filtradas, subset = rhs %in% "NOx_cat_Bueno=1")
+inspect(sort(filtradas_NOx_bueno, by = "confidence"))
+```
+
+```{r}
+maximales_NOx_bueno = is.maximal(filtradas_NOx_bueno)
+inspect(filtradas_NOx_bueno[maximales_NOx_bueno])
+```
+
+Viento dir E, temperatura entre 20 y 30ºC, humedad entre 30 y 60% , ráfagas de viento superiores a 15 km/h y vientos mayores a 20km/h.
+
+### O3
+
+```{r}
+filtradas_O3_bueno = arules::subset(filtradas, subset = rhs %in% "O3_cat_Bueno=1")
+inspect(sort(filtradas_O3_bueno, by = "confidence"))
+```
+
+```{r}
+maximales_O3_bueno = is.maximal(filtradas_O3_bueno)
+inspect(filtradas_O3_bueno[maximales_O3_bueno])
+```
+
+Viento dir W, humedad entre 60 y 90%
+
+```{r}
+filtradas_O3 = arules::subset(filtradas, subset = rhs %pin% "O3_cat_")
+inspect(sort(filtradas_O3, by = "confidence"))
+```
+
+
+### Patrones en condiciones malas de contaminantes
+
+Para estudiar patrones en condiciones malas de contaminantes, vamos a seleccionar solo las categorias malas de los contaminantes.
+
+```{r}
+insalubres <- grep("Insalubre", consecuentes, value = TRUE)
+insalubres
+```
+
+```{r}
+reglas_insalubres = apriori(
+  df_met_cont_2, parameter = list(support = 0.001, confidence = 0.8, minlen=2),
+  appearance = list(lhs = antecedentes, rhs = insalubres)
+)
+```
+
+```{r}
+reglas_insalubres2 = reglas_insalubres[!is.redundant(x = reglas_insalubres, measure = "confidence")]
+filtradas_insalubres = arules::subset(reglas_insalubres2, subset = lift > 1.1)
+inspect(sort(filtradas_insalubres, by = "confidence"))
+```
+
+Viento dir E. para $O_3$
