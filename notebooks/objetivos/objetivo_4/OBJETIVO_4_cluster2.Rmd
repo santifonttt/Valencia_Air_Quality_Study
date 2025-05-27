@@ -1,0 +1,2259 @@
+---
+title: "OBJETIVO 4"
+author: "Sergio Ortiz"
+date: "2025-05-22"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: sentence
+resource_files:
+- estaciones_valencia.csv
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Introducción
+
+En el marco del análisis integral de la **calidad ambiental de la ciudad de Valencia**, este bloque de trabajo se centra en la **contribución del parque edificatorio a las emisiones de CO₂** y en cómo dicho comportamiento energético se relaciona con otros factores urbanos (contaminantes atmosféricos, tráfico y condiciones meteorológicas).
+
+### Objetivos específicos del estudio
+
+1.  **Depurar y enriquecer** la base de datos de certificados energéticos para obtener indicadores clave, entre ellos:
+
+    -   Intensidad de emisiones (kg CO₂ / m²·año)\
+    -   Antigüedad de los edificios\
+    -   Tipología y uso predominante
+
+2.  **Estudio preliminar de los códigos postales**
+
+3.  **Geocodificar** cada inmueble y **agruparlos por clústeres** espaciales que permitan identificar patrones de emisiones a escala de barrio (centro histórico, zonas industriales, área marítima, etc.).
+
+4.  **Relacionar** los clústeres edificatorios con:
+
+    -   Niveles de contaminantes (NO₂, PM₂.₅…) registrados en las estaciones de calidad del aire.\
+    -   **Tráfico** (intensidad media diaria) en la red principal.
+
+5.  **Evaluar la influencia** de variables como uso, antigüedad o contexto urbano en las emisiones y en la calidad del aire local, con el fin de proponer estrategias de mitigación y renovación energética.
+
+> Este documento aborda el **Paso 1 – Limpieza y preprocesado** del CSV de certificados, dejando los datos listos para la geocodificación y los análisis posteriores.
+
+Los datos que se han analizado provienen de la página web del [**IVACE**](https://gceedadesobertes.aven.es/dadesobertes/), se ha descargado los csv de los registros de los **Certificado de Eficiencia Energéticos(CEE)** desde 2013 a 2024, posteriormente se han unido todos los archivos en uno solo y se ha procedido a la limpieza Y análisis de los datos.
+
+Preliminarmente, se hizo una limpieza de las zonas con sensores de contaminación pero posterioremente se ha hecho otra selección.
+ras la limpieza de los datos se ha procedido a un escrapeado de los datos que se encuentran en catastro para obtener una base de datos más completa para abordar este objetivo,
+
+La web de Catastro no ha sido sencilla para obtener los datos, es una página web que no está optimizada, cada consulta requería de mucho tiempo, habiendo casos de casi 4 segundos, si se hubiera ejecutado una consulta por interacción hubiera durado días y también hay que comentar la estricta seguridad y dificultad que tiene la página, a los pocos intentos detecta que es un proceso automático y bloquea la IP durante una semana y tienen activado la aparición de las cookies varias veces por entrada al portal, con características diferentes y pensamos que no salen al mismo tiempo para todas las referencia catastrales.
+
+Para obtener la mayoría de los datos se han usado solicitudes via URL indicando la referencia catastral y encontrando los numero que dispone cada localidad para usar este método, para solucionar el problema de lentitud se han utilizado procesos multiparalelizados, y el uso de proxies, la máquina virtual ha sido de gran ayuda porque nos ha permitido no tener nuestros ordenadores inutilizados durante el proceso.
+
+Con ese método se consiguó la mayoria de datos extras de las referencias catastrales, los restantes se han tenido que hacer usando la interfaz de la web, y la librería Selenium de Python y otras no se han podido obtener datos porque este identificador del inmueble estaba codificados de distinta manera, ya sea errores humanos, o por la inclusión de signos , letras o espacios, se intentó corregirlos pero no tuvo muchos exito por no haber un patrón.
+
+Se quería geolocalizar cada vivienda por la dirección usando la API de Google Maps, pero no se ha podido realizar por el coste que tiene.Se han intentado numerosas técnicas y no han tenido el éxito que se deseaba:
+
+```         
+- API de R CatastRO: funcionó con 6000k referencias pero nos bloqueó por exceso de solicitudes y era muy lenta. 
+- Solicitudes masivas a la web de Catastro por archivos XML, devolvía datos económicos y otros que no eran de importancia. 
+- Scrapeo de apartado de información de parcelas, no conseguímos sacar las coordenadas. 
+```
+
+Por último intento se pudo hacer con los shapefiles que dispone Catastro, aunque no se encontró de forma sencilla el contenido que se disponía ni como funcionaban, tras varias pruebas se han obtenido un 98% de las coordenadas e incluso el polígono , pero en esta situación solo utilizaremos un punto para facilitar la geolocalización.
+Se puede ver el archivo de Python que nos ha permitdo obtenerlo en la carpeta COORDENADAS REFERENCIAS, el restante de geolocalización se hará via API Google Maps, debido a que ya no es gran cantidad.
+
+```{r librerias}
+
+# Carga de librerías
+library(tidyverse)   # readr, dplyr, ggplot2...
+library(janitor)     # clean_names, tabyl
+library(lubridate)   # manejo de fechas
+library(stringr)     # expresiones regulares
+library(sf)          # objetos espaciales (cuando geocodifiques)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(fastDummies)
+library(FactoMineR)
+library(factoextra)
+library(leaflet)      # mapeo interactivo
+library(geosphere)
+library(ggplot2)
+
+
+set.seed(123)   # reproducibilidad
+
+
+```
+
+# Estudio preliminar de los códigos postales
+
+## Preparado de datos
+
+You can also embed plots, for example:
+
+```{r , echo=FALSE}
+
+ruta_archivo <- "data_final_Objetivo_4.csv"
+data <- read.csv(ruta_archivo, stringsAsFactors = FALSE)
+
+
+head(data)
+
+```
+
+```{r , echo=FALSE}
+
+unique(data$USO_EDIFICIO)
+
+```
+
+Decidimos borrar la columna AlmEst.UsoRESID por tratarse de plazas de garaje, trasteros, no nos interesa para el estudio
+
+```{r , echo=FALSE}
+
+# Filtramos para quedarnos solo con los usos relevantes
+data <- data %>%
+  filter(USO_EDIFICIO != "AlmEst.UsoRESID")
+
+```
+
+```{r Agrupación de categorías}
+library(dplyr)
+library(stringr)
+
+data <- data %>%
+  mutate(
+    uso_simplificado = case_when(
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("VIVIENDA INDIVIDUAL", "VIVIENDA/S UNIFAMILIAR", "Residencial")) ~ "Vivienda",
+      str_detect(str_to_lower(USO_EDIFICIO), "edificio de viviendas") ~ "Edificio de Viviendas",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("OFICINAS", "Oficinas")) ~ "Oficina",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("LOCAL COMERCIAL", "EDIFICIO COMERCIAL", "Comercial")) ~ "Comercial",
+      str_to_lower(USO_EDIFICIO) == "hotel" ~ "Hotel",
+      str_to_lower(USO_EDIFICIO) == "restaurante" ~ "Restaurante",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("centro de enseñanza", "suelo sin edif.")) ~ "Centro de Enseñanza",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("sanidad,benefic", "hospital")) ~ "Sanidad",
+      str_to_lower(USO_EDIFICIO) == "religioso" ~ "Religioso",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("deportivo", "instalaciones deportivas")) ~ "Deportivo",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("cultural", "espectáculos", "espectÃ¡culos")) ~ "Cultural",
+      str_to_lower(USO_EDIFICIO) %in% str_to_lower(c("industrial", "almest.usoindus")) ~ "Industrial",
+      str_to_lower(USO_EDIFICIO) == "agrario" ~ "Agrario",
+      str_to_lower(USO_EDIFICIO) == "rdl 1/04 8.2.d" ~ "Puerto",
+      TRUE ~ "Otro"
+    )
+  )
+head(data)
+```
+
+```{r Eliminar filas}
+# Elimina filas duplicadas por REFERENCIA_CATASTRAL + EMISIONES_CO2_VALOR
+# o por DIRECCION + EMISIONES_CO2_VALOR
+data <- data %>%
+  distinct(REFERENCIA_CATASTRAL, EMISIONES_CO2_VALOR, .keep_all = TRUE) %>%
+  distinct(DIRECCION, EMISIONES_CO2_VALOR, .keep_all = TRUE)
+```
+
+```{r Selección de columnas}
+# Seleccionar solo las columnas indicadas
+
+data <- data %>%
+  select(ANYO_CONSTRUCCION, uso_simplificado, CODIGO_POSTAL,
+         EMISIONES_CO2_VALOR, SUPERFICIE_M2, parcela_catastral, lat, lon, EMISIONES_CO2_LETRA, MUNICIPIO_REFERENCIAS, USO_EDIFICIO)
+
+```
+
+# Limpieza de los datos
+
+Vamos a representar cajas de bigotes por uso del edificio así podemos ver si hay anómalos.
+
+```{r , Busqueda de anómalos}
+# Función para detectar outliers por USO_EDIFICIO y ordenarlos por anomalía
+detectar_outliers_por_uso <- function(data) {
+  outliers <- data %>%
+    group_by(uso_simplificado) %>%
+    mutate(
+      Q1 = quantile(EMISIONES_CO2_VALOR, 0.25, na.rm = TRUE),
+      Q3 = quantile(EMISIONES_CO2_VALOR, 0.75, na.rm = TRUE),
+      IQR = Q3 - Q1,
+      limite_inferior = Q1 - 1.5 * IQR,
+      limite_superior = Q3 + 1.5 * IQR
+    ) %>%
+    ungroup() %>%
+    filter(EMISIONES_CO2_VALOR < limite_inferior | EMISIONES_CO2_VALOR > limite_superior) %>%
+    mutate(
+      anomalía_inferior = abs(EMISIONES_CO2_VALOR - limite_inferior),
+      anomalía_superior = abs(EMISIONES_CO2_VALOR - limite_superior),
+      anomalía = ifelse(EMISIONES_CO2_VALOR < limite_inferior, anomalía_inferior, anomalía_superior)
+    ) %>%
+    arrange(uso_simplificado, desc(anomalía))  # Orden dentro de cada grupo
+  
+  print("Outliers por uso_simplificado ordenados de mayor a menor anomalía:")
+  print(outliers %>% select(uso_simplificado, EMISIONES_CO2_VALOR, anomalía, everything()))
+  
+  return(outliers)
+ 
+} 
+  
+  
+generar_boxplot_por_uso <- function(data) {
+  ggplot(data, aes(x = uso_simplificado, y = EMISIONES_CO2_VALOR, fill = uso_simplificado)) +
+    geom_boxplot(outlier.color = "red", outlier.shape = 8) +
+    labs(
+      title = "Boxplot de emisiones de CO₂ por tipo de uso del edificio",
+      x = "Uso del edificio",
+      y = "Emisiones de CO₂ (kg/m²·año)"
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "none"
+    ) +
+    scale_fill_brewer(palette = "Set3")
+
+
+
+}
+
+# Aplicar la función a los datos
+outliers_por_uso <- detectar_outliers_por_uso(data)
+
+# Generar boxplot original (con outliers)
+
+generar_boxplot_por_uso(data)
+```
+
+Los anómalos de ALMEST.UsoINDUS parece que corresponden a las cochera de EMT que se encuentran al lado de la UPV, tiene explicación dicha contaminación.
+El centro de enseñanza no es muy anónalo, es un centro con muchas plantas y podria tener sentido esas emisiones.
+El más distanciado de Comercial se trata de un parking, se puede justificar sus emisiones por la cantidad de coches diarios y el segundo de un restaurante.
+En cultural el que más se distancia del resto es una biblioteca de grandes dimensiones.
+En edificio Comercial, hay un centro de estética y una lavandería, parece muy sobredimensionada las emisiones de CO2, se decide eliminar.
+El siguiente se trata de un centro comercial con parking, no es anómalo.
+Los bloques de vivienda más anónalos se eliminan, tienen emisiones de CO2 muy elevadas.
+En instalaciones deportivas hay anómalos muy extremos, Se elimina el primero por estar muy alejado al resto.
+En cuanto a Oficina , las 3 primeras tienen emisiones muy elevadas, se eliminan.
+Vivienda individual, se eliminan las 13 primeros por tener una anomalía muy elevada.
+
+```{r eLIMINAR ANÓMALOS}
+
+filas_a_eliminar <- data.frame(
+  USO_EDIFICIO = rep("VIVIENDA INDIVIDUAL", 12),
+  EMISIONES_CO2_VALOR = c(783, 783, 576, 494, 461, 365, 334, 332, 328, 315, 296, 288),
+  SUPERFICIE_M2 = c(728.000, 728.000, 521.000, 439.000, 406.000, 310.000, 279.000, 277.000, 273.000, 260.000, 241.000, 233.000),
+  ANYO_CONSTRUCCION = c(1973, 1955, 1970, 1931, 1997, 1960, 1966, 1981, 1960, 1966, 1955, 1890),
+  CODIGO_POSTAL = c(46026, 46006, 46024, 46006, 46007, 46024, 46023, 46012, 46900, 46017, 46019, 46001),
+  parcela_catastral = c(
+    "6202901YJ2760A", "5714130YJ2751F", "9312408YJ2791C", "6016403YJ2761E", "4610805YJ2741B",
+    "9505401YJ2790F", "8316420YJ2781E", "0800701YJ3600B", "7989803YJ1678N", "4697202YJ2649H",
+    "5648405YJ2754H", "5728309YJ2752H"
+  ),
+  lat = c(
+    39.45331, 39.46096, 39.46737, 39.46279, 39.45825,
+    39.46697, 39.46845, 39.52726, 39.46618, 39.44596,
+    39.49286, 39.47357
+  ),
+  lon = c(
+    -0.3721880, -0.3771560, -0.3357290, -0.3740960, -0.3896420,
+    -0.3324780, -0.3464060, -0.4334920, -0.3505950, -0.3906090,
+    -0.3769920, -0.3768470
+  )
+)
+
+library(dplyr)
+
+data <- anti_join(data, filas_a_eliminar, by = c(
+  "USO_EDIFICIO", "EMISIONES_CO2_VALOR", "SUPERFICIE_M2",
+  "ANYO_CONSTRUCCION", "CODIGO_POSTAL", "parcela_catastral",
+  "lat", "lon"
+))
+
+# Corrección de filas 
+# 1. Crear el data.frame con las correcciones
+coord_corregidas <- data.frame(
+  parcela_catastral = c("000720100YJ16C", "001430800YJ06F", "001431900YJ06F", 
+                        "0036613YJ2703N", "1449317YJ3514G", "1776551YJ2717N"),
+  lat_nueva = c(39.401366901191494, 39.41586484113674, 39.41747731892181, 
+                39.482406786374035, 39.48233225977674, 39.51680882117547),
+  lon_nueva = c(-0.5415714942790637, -0.5991076441776843, -0.5985237400117808, 
+                -0.4423017452644876, -0.4422910164289535, -0.4216401894407453)
+)
+
+# 2. Hacer el join y reemplazar solo las coordenadas que coincidan
+data_parcelas<- data %>%
+  left_join(coord_corregidas, by = "parcela_catastral") %>%
+  mutate(
+    lat = ifelse(!is.na(lat_nueva), lat_nueva, lat),
+    lon = ifelse(!is.na(lon_nueva), lon_nueva, lon)
+  ) %>%
+  select(-lat_nueva, -lon_nueva)
+
+#Se observa errores con algunas referecias así que se eliminan 
+# Crear el vector de referencias a eliminar
+referencias_a_eliminar <- c(
+  "46246A03300153", "5481413YJ2658A", "6462907YJ2766A", "46246A02700129", "46246A02500187",
+  "46246A03001172", "4155617YJ2745E", "46246A03000417", "7173219YJ1677S", "46246A02600336",
+  "5574209YJ2657S", "46246A03001226", "7728122YJ2772H", "5912335YJ2751B", "6212322YJ2761C",
+  "46246A02600652", "46246A03001304", "6520819YJ2762B", "46246A03100108", "4723124YJ1742S",
+  "5583104YJ1758S", "2428811YJ2722N", "46246A02600539", "6519422YJ2761H", "46246A02700106",
+  "4045808YJ2644N", "9826603YJ2792F", "46246A03001029", "46246A00900243", "8485807YJ1688N",
+  "5738220YJ2753H", "46246A02900017", "2431707YJ2723S", "4523104YJ1742S", "46246A03000069",
+  "7932211YJ2773D", "7913208YJ1871S", "46246A03000108", "7365530YJ1676N", "5773116YJ1657S",
+  "002040900YJ06F", "46246A04700031", "5913108YJ2751D", "5482503YJ1658S", "5944120YJ2754D",
+  "46246A03200101", "46246A03200160", "5247418YJ2754G", "7624409YJ2772D", "9307111YJ2790E",
+  "7612310YJ1871S", "46246A02600558", "46246A03001362", "46246A03001105", "5292113YJ1759S",
+  "6943313YJ2764D", "6682110YJ1768S", "4338605YJ2743G", "6017411YJ2761E", "46246A02600472",
+  "5571365YJ2657S", "46246A03200170", "46246A04800018", "9622315YJ2792D", "4655810YJ2745F",
+  "7975108YJ1677N", "5384708YJ1758S", "5586718YJ1758N", "46246A04800152", "5172805YJ2657S",
+  "46246A04900042", "46246A03000901", "2068514YJ2726N", "46246A03000794", "9940302YJ2794B",
+  "9626418YJ2792F", "46246A04600140", "46246A03200074", "7612308YJ1871S", "46246A03001411",
+  "8223722YJ2782C", "46246A03001317", "5583108YJ1758S", "8390608YJ1689S", "5582907YJ1758S",
+  "46246A00100105", "5841220YJ2754B", "9937621YJ2793F", "2877916YJ2627N", "7520614YJ2772B",
+  "46246A02600453", "46246A03001107", "46246A03200158", "46246A02900100", "2263112YJ2726S",
+  "46246A00200424", "46246A05200099", "46246A02900107", "46246A02600470", "9415316YJ2791E",
+  "3645213YJ2634N", "4220318YJ2742A"
+)
+
+# Filtrar las parcelas que NO están en la lista
+data_parcelas <- data_parcelas %>%
+  filter(!parcela_catastral %in% referencias_a_eliminar)
+
+```
+
+```{r análisis de distribución}
+
+library(e1071)
+
+resumen_emisiones <- data %>%
+  summarise(
+    n              = sum(!is.na(EMISIONES_CO2_VALOR)),
+    media          = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    mediana        = median(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    desviacion     = sd(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    minimo         = min(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    Q1             = quantile(EMISIONES_CO2_VALOR, 0.25, na.rm = TRUE),
+    Q3             = quantile(EMISIONES_CO2_VALOR, 0.75, na.rm = TRUE),
+    maximo         = max(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    asimetria      = skewness(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    curtosis       = kurtosis(EMISIONES_CO2_VALOR, na.rm = TRUE)
+  )
+
+print(resumen_emisiones)
+
+library(ggplot2)
+
+ggplot(data, aes(x = EMISIONES_CO2_VALOR)) +
+  geom_histogram(bins = 50, fill = "#1f77b4", color = "black", alpha = 0.7) +
+  labs(
+    title = "Distribución de las Emisiones de CO₂",
+    x = "Emisiones de CO₂ (kg/m²·año)",
+    y = "Frecuencia"
+  ) +
+  theme_minimal()
+
+
+```
+
+La media y mediana se encuentran muy próximas, nos ofrece una dispersión moderada respecto a la media.
+Si hablamos de la asímetría nos ofrece la información que está muy sesgada a la deracha y tiene alta curtosis, lo que indica que hay una gran cantidad de valores extremos.
+
+Se observa la fila que emite 2035 kg/m²·año,
+
+```{r , echo=FALSE}
+data %>%
+  filter(EMISIONES_CO2_VALOR == 2035)
+
+```
+
+Se elimina dicho inmueble, se trata de un bar y parece muchas emisiones aunque sea viejo y con mala eficiencia energética.
+
+```{r , echo=FALSE}
+# Eliminar el inmueble con 2035 kg/m²·año
+data <- data %>%
+  filter(!(ANYO_CONSTRUCCION     == 1993 &
+           USO_EDIFICIO          == "LOCAL COMERCIAL" &
+           CODIGO_POSTAL         == 46470 &
+           EMISIONES_CO2_VALOR   == 2035 &
+           SUPERFICIE_M2         == 1540 &
+           parcela_catastral     == "3754704YJ2635S" &
+           lat                   == 39.49776 &
+           lon                   == -0.399536))
+```
+
+```{r , echo=FALSE}
+library(e1071)
+
+resumen_emisiones <- data %>%
+  summarise(
+    n              = sum(!is.na(EMISIONES_CO2_VALOR)),
+    media          = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    mediana        = median(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    desviacion     = sd(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    minimo         = min(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    Q1             = quantile(EMISIONES_CO2_VALOR, 0.25, na.rm = TRUE),
+    Q3             = quantile(EMISIONES_CO2_VALOR, 0.75, na.rm = TRUE),
+    maximo         = max(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    asimetria      = skewness(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    curtosis       = kurtosis(EMISIONES_CO2_VALOR, na.rm = TRUE)
+  )
+print(resumen_emisiones)
+```
+
+```{r , echo=FALSE}
+data %>%
+  filter(EMISIONES_CO2_VALOR == 1185)
+
+```
+
+A pesar de ser una vivienda vieja del Carmen sigue siendo muy por encima de la media, se decide eliminar.
+
+```{r , echo=FALSE}
+data <- data %>%
+  filter(!(ANYO_CONSTRUCCION   == 1800 &
+           USO_EDIFICIO        == "EDIFICIO DE VIVIENDAS (BLOQUE COMPLETO)" &
+           CODIGO_POSTAL       == 46003 &
+           EMISIONES_CO2_VALOR == 1185 &
+           SUPERFICIE_M2       == 1240 &
+           parcela_catastral   == "5632313YJ2753D" &
+           lat                 == 39.4778 &
+           lon                 == -0.377418))
+```
+
+```{r , echo=FALSE}
+library(e1071)
+
+resumen_emisiones <- data %>%
+  summarise(
+    n              = sum(!is.na(EMISIONES_CO2_VALOR)),
+    media          = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    mediana        = median(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    desviacion     = sd(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    minimo         = min(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    Q1             = quantile(EMISIONES_CO2_VALOR, 0.25, na.rm = TRUE),
+    Q3             = quantile(EMISIONES_CO2_VALOR, 0.75, na.rm = TRUE),
+    maximo         = max(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    asimetria      = skewness(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    curtosis       = kurtosis(EMISIONES_CO2_VALOR, na.rm = TRUE)
+  )
+print(resumen_emisiones)
+```
+
+Para hacer clustering que es el objetivo principal de este objetivo no se necesita tener datos normalizados.
+decidimos no eliminar más datos.
+
+## Estudio Preliminar Códigos Postales
+
+Queremos ver la cantidad de certificados que hay por código postal y la letra de emisiones de CO2, para ver si hay algún patrón.
+
+```{r , echo=FALSE}
+library(dplyr)
+library(tidyr)
+
+# Crear tabla de frecuencias por código postal, municipio y letra de emisiones
+tabla_frecuencias <- data %>%
+  group_by(CODIGO_POSTAL, EMISIONES_CO2_LETRA) %>%
+  summarise(Frecuencia = n(), .groups = "drop") %>%
+  arrange(CODIGO_POSTAL, EMISIONES_CO2_LETRA)
+
+# Pivotar: las letras A–G se convierten en columnas
+tabla_frecuencias <- data %>%
+  filter(!is.na(EMISIONES_CO2_LETRA), EMISIONES_CO2_LETRA != "") %>%
+  group_by(CODIGO_POSTAL, MUNICIPIO_REFERENCIAS, EMISIONES_CO2_LETRA) %>%
+  summarise(Frecuencia = n(), .groups = "drop") %>%
+  arrange(CODIGO_POSTAL, EMISIONES_CO2_LETRA)
+
+
+tabla_frecuencias_pivotada <- tabla_frecuencias %>%
+  pivot_wider(
+    names_from = EMISIONES_CO2_LETRA,
+    values_from = Frecuencia,
+    values_fill = list(Frecuencia = 0)
+  ) %>%
+  mutate(
+    Suma_Total = rowSums(across(where(is.numeric) & !c(CODIGO_POSTAL)))
+  )
+
+
+# Ver resultado
+print(tabla_frecuencias_pivotada)
+```
+```{r}
+# Agrupar por código postal y letra, y calcular la media
+tabla_medias <- data %>%
+  filter(!is.na(EMISIONES_CO2_LETRA) & EMISIONES_CO2_LETRA != "") %>%
+  group_by(CODIGO_POSTAL, EMISIONES_CO2_LETRA) %>%
+  summarise(Media_Emisiones_CO2 = mean(EMISIONES_CO2_VALOR, na.rm = TRUE), .groups = "drop")
+
+# Pivotar y renombrar
+tabla_medias_pivotada <- tabla_medias %>%
+  pivot_wider(
+    names_from = EMISIONES_CO2_LETRA,
+    values_from = Media_Emisiones_CO2,
+    values_fill = list(Media_Emisiones_CO2 = NA)
+  )
+
+# Mostrar tabla
+print(tabla_medias_pivotada)
+
+```
+
+
+# Gráfico de barras apiladas de las emisiones de CO2
+
+```{r}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Definir los colores por categoría energética
+colores_categorias <- c(
+  "A" = "#4CAF50",     # Verde oscuro
+  "B" = "#8BC34A",     # Verde claro
+  "C" = "#CDDC39",     # Amarillo verdoso
+  "D" = "#FFEB3B",     # Amarillo
+  "E" = "#FFC107",     # Naranja claro
+  "F" = "#FF5722",     # Naranja oscuro
+  "G" = "#F44336"      # Rojo
+)
+
+# 1. Calcular suma total por fila (excluyendo columnas no numéricas)
+tabla_frecuencias_ordenada <- tabla_frecuencias_pivotada %>%
+  mutate(Suma_Total = rowSums(across(where(is.numeric) & !c(CODIGO_POSTAL)), na.rm = TRUE)) %>%
+  group_by(CODIGO_POSTAL) %>%
+  arrange(CODIGO_POSTAL, desc(Suma_Total)) %>%
+  ungroup()
+
+# 2. Convertir a formato largo para ggplot (excluyendo Suma_Total)
+tabla_frecuencias_pivotada_long <- tabla_frecuencias_ordenada %>%
+  select(-Suma_Total) %>%
+  pivot_longer(
+    cols = -c(CODIGO_POSTAL, MUNICIPIO_REFERENCIAS),
+    names_to = "Categoria",
+    values_to = "Frecuencia"
+  )
+
+# 3. Crear gráfico por municipio
+municipios <- unique(tabla_frecuencias_pivotada_long$MUNICIPIO_REFERENCIAS)
+graficos <- list()
+
+for (mun in municipios) {
+  datos_municipio <- tabla_frecuencias_pivotada_long %>%
+    filter(MUNICIPIO_REFERENCIAS == mun) %>%
+    mutate(CODIGO_POSTAL = factor(CODIGO_POSTAL, levels = unique(CODIGO_POSTAL)))
+  
+  grafico <- ggplot(datos_municipio, aes(x = CODIGO_POSTAL, y = Frecuencia, fill = Categoria)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = colores_categorias) +
+    labs(
+      x = "Código Postal",
+      y = "Frecuencia",
+      title = paste("Distribución de letras energéticas en", mun)
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  nombre_variable <- paste0(gsub(" ", "_", tolower(mun)), "_grafico_letras")
+  assign(nombre_variable, grafico, envir = .GlobalEnv)
+  graficos[[nombre_variable]] <- grafico
+}
+
+
+```
+
+```{r}
+for (grafico in graficos) {
+  print(grafico)
+}
+```
+
+Se puede observar que en todos los barrios siguen una proporción parecida en las calificaciones de las emisiones, siendo Valencia la ciudad con más certificados energéticos realizados.
+Aunque estén incentivando la mejora de eficiencia energética y la reducción de la huella de carbono, se puede ver que las viviendas mejores califcadas aún siguen siendo pocas.
+
+# Tabla de medias de emisiones de CO2
+
+```{r , echo=FALSE}
+# Calcular la media de emisiones de CO₂ por código postal
+# Calcular la media de emisiones de CO2 por código postal y municipio
+media_emisiones_co2 <- data %>%
+  filter(EMISIONES_CO2_VALOR > 0) %>%
+  group_by(CODIGO_POSTAL) %>%
+  summarise(Media_Emisiones_CO2 = mean(EMISIONES_CO2_VALOR, na.rm = TRUE), .groups = "drop")
+
+# Se añade el municipio a la tabla de medias de emisiones de CO2
+
+
+# Calcular la media corregida SOLO para Mislata (46920)
+media_mislata_valor <- data %>%
+  filter(CODIGO_POSTAL == "46920", !is.na(EMISIONES_CO2_VALOR), EMISIONES_CO2_VALOR > 0) %>%
+  summarise(Media_CO2 = mean(EMISIONES_CO2_VALOR, na.rm = TRUE)) %>%
+  pull(Media_CO2)
+
+# Sustituir el valor de media en la tabla general media_emisiones_co2
+media_emisiones_co2 <- media_emisiones_co2 %>%
+  mutate(
+    Media_Emisiones_CO2 = if_else(CODIGO_POSTAL == "46920", media_mislata_valor, Media_Emisiones_CO2)
+  )
+# Calcular la media corregida SOLO para Sedavi (46910)
+media_mislata_valor <- data %>%
+  filter(CODIGO_POSTAL == "46910", !is.na(EMISIONES_CO2_VALOR), EMISIONES_CO2_VALOR > 0) %>%
+  summarise(Media_CO2 = mean(EMISIONES_CO2_VALOR, na.rm = TRUE)) %>%
+  pull(Media_CO2)
+
+# Sustituir el valor de media en la tabla general media_emisiones_co2
+media_emisiones_co2 <- media_emisiones_co2 %>%
+  mutate(
+    Media_Emisiones_CO2 = if_else(CODIGO_POSTAL == "46910", media_mislata_valor, Media_Emisiones_CO2)
+  )
+
+#Se asigna letra a cada media 
+media_emisiones_co2 <- media_emisiones_co2 %>%
+  mutate(EMISIONES_CO2_LETRA = case_when(
+    Media_Emisiones_CO2 <= 8 ~ "A",
+    Media_Emisiones_CO2 > 8 & Media_Emisiones_CO2 <= 12 ~ "B",
+    Media_Emisiones_CO2 > 12 & Media_Emisiones_CO2 <= 19 ~ "C",
+    Media_Emisiones_CO2 > 19 & Media_Emisiones_CO2 <= 29 ~ "D",
+    Media_Emisiones_CO2 > 29 & Media_Emisiones_CO2 <= 40 ~ "E",
+    Media_Emisiones_CO2 > 40 & Media_Emisiones_CO2 <= 55 ~ "F",
+    Media_Emisiones_CO2 > 55 ~ "G"
+  ))
+media_emisiones_co2
+# Convertir las filas de EMISIONES_CO2_LETRA en columnas (pivotar)
+
+tabla_medias_pivotada <- media_emisiones_co2 %>%
+  pivot_wider(
+    names_from = EMISIONES_CO2_LETRA,  # Convertir las letras en columnas
+    values_from = Media_Emisiones_CO2,  # Los valores serán las medias de emisiones CO2
+    values_fill = list(Media_Emisiones_CO2 = NA)  # Rellenar con NA en caso de valores faltantes
+    
+  )
+```
+
+# Tabla frecuencia uso_simplificado
+
+```{r , echo=FALSE}
+tabla_uso_edificio <- data %>%
+  group_by(CODIGO_POSTAL, uso_simplificado) %>%
+  summarise(Frecuencia = n(), .groups = "drop") %>%
+  arrange(CODIGO_POSTAL, desc(Frecuencia))
+tabla_uso_edificio_pivotada <- tabla_uso_edificio %>%
+  pivot_wider(
+    names_from = uso_simplificado,
+    values_from = Frecuencia,
+    values_fill = list(Frecuencia = 0)
+  )
+tabla_uso_edificio_pivotada <- tabla_uso_edificio_pivotada %>%
+  mutate(Total_Usos = rowSums(select(., -CODIGO_POSTAL), na.rm = TRUE))
+
+# Suponiendo que sabes que las columnas de uso son del tipo character y numéricas
+usos_cols <- setdiff(names(tabla_uso_edificio_pivotada), c("CODIGO_POSTAL", "Total_Usos"))
+
+tabla_uso_edificio_pivotada <- tabla_uso_edificio_pivotada %>%
+  rowwise() %>%
+  mutate(
+    Uso_Dominante = usos_cols[which.max(c_across(all_of(usos_cols)))]
+  ) %>%
+  ungroup()
+
+```
+
+```{r , echo=FALSE}
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+# Cargar el GeoJSON del mapa
+codigos_postales_mapa <- st_read("mapa_valencia_ccpp.geojson")
+
+# Vista previa rápida del mapa
+ggplot(codigos_postales_mapa) 
+  geom_sf(fill = "lightblue", color = "black") +
+  theme_minimal()
+```
+
+```{r , echo=FALSE}
+# Se comprueba los valores del shapefile
+names(codigos_postales_mapa)
+codigos_postales_mapa <- codigos_postales_mapa %>%
+  rename(CODIGO_POSTAL = COD_POSTAL)
+
+# 1. ¿Tiene columnas?
+names(tabla_uso_edificio_pivotada)
+
+# 2. ¿Tiene filas?
+names(tabla_medias_pivotada)
+
+```
+
+```{r , echo=FALSE}
+codigos_postales_mapa$CODIGO_POSTAL <- as.character(codigos_postales_mapa$CODIGO_POSTAL)
+media_emisiones_co2$CODIGO_POSTAL <- as.character(media_emisiones_co2$CODIGO_POSTAL)
+tabla_frecuencias_pivotada$CODIGO_POSTAL <- as.character(tabla_frecuencias_pivotada$CODIGO_POSTAL)
+
+tabla_medias_pivotada <- tabla_medias_pivotada %>%
+  mutate(across(any_of(c("A", "B", "C", "D", "E", "F", "G")), as.numeric))
+
+
+```
+
+```{r , echo=FALSE}
+# fILTRAMOS DATOS PARA CÓDIGOS POSTALES 
+codigos_postales_filtrados <- codigos_postales_mapa %>%
+  filter(CODIGO_POSTAL %in% media_emisiones_co2$CODIGO_POSTAL)
+names(codigos_postales_filtrados)
+names(media_emisiones_co2)
+names(tabla_frecuencias_pivotada)
+names(tabla_medias_pivotada)
+
+# Asegura que todos usan CODIGO_POSTAL como character
+codigos_postales_filtrados$CODIGO_POSTAL <- as.character(codigos_postales_filtrados$CODIGO_POSTAL)
+media_emisiones_co2$CODIGO_POSTAL        <- as.character(media_emisiones_co2$CODIGO_POSTAL)
+tabla_frecuencias_pivotada$CODIGO_POSTAL <- as.character(tabla_frecuencias_pivotada$CODIGO_POSTAL)
+tabla_medias_pivotada$CODIGO_POSTAL      <- as.character(tabla_medias_pivotada$CODIGO_POSTAL)
+tabla_uso_edificio_pivotada$CODIGO_POSTAL <- as.character(tabla_uso_edificio_pivotada$CODIGO_POSTAL)
+
+codigos_postales_mapa_final <- codigos_postales_filtrados %>%
+  left_join(media_emisiones_co2,        by = "CODIGO_POSTAL") %>%
+  left_join(tabla_frecuencias_pivotada, by = "CODIGO_POSTAL") %>%
+  left_join(tabla_medias_pivotada,      by = "CODIGO_POSTAL") %>%
+  left_join(tabla_uso_edificio_pivotada, by = "CODIGO_POSTAL")
+
+
+
+```
+
+```{r , echo=FALSE}
+crear_grafico_tarta <- function(tabla_frecuencias, tabla_medias, cod_postal, colores_categorias) {
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+
+  # Filtrar por código postal
+  df_frecuencias <- tabla_frecuencias %>% filter(CODIGO_POSTAL == cod_postal)
+  df_medias <- tabla_medias %>% filter(CODIGO_POSTAL == cod_postal)
+
+  if (nrow(df_frecuencias) == 0 | nrow(df_medias) == 0) {
+    stop("El código postal especificado no se encuentra en los datos.")
+  }
+
+  # Excluir columnas no deseadas si existen
+  cols_excluir <- intersect(c("CODIGO_POSTAL", "MUNICIPIO", "Suma_Total", "NA"), names(df_frecuencias))
+  df_frecuencias_long <- df_frecuencias %>%
+    select(-all_of(cols_excluir)) %>%
+    pivot_longer(cols = where(is.numeric), names_to = "Categoria", values_to = "Cantidad")
+
+  cols_excluir2 <- intersect(c("CODIGO_POSTAL", "MUNICIPIO", "Suma_Total", "NA"), names(df_medias))
+  df_medias_long <- df_medias %>%
+    select(-all_of(cols_excluir2)) %>%
+    pivot_longer(cols = where(is.numeric), names_to = "Categoria", values_to = "Media_CO2")
+
+  # Unir frecuencias y medias, eliminar letras no definidas
+  df_final <- left_join(df_frecuencias_long, df_medias_long, by = "Categoria") %>%
+    filter(Categoria %in% names(colores_categorias)) %>%
+    mutate(Porcentaje = (Cantidad / sum(Cantidad, na.rm = TRUE)) * 100)
+
+  # Crear gráfico de tarta
+  grafico <- ggplot(df_final, aes(x = "", y = Cantidad, fill = Categoria)) +
+    geom_bar(stat = "identity", width = 1, color = "black") +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    scale_fill_manual(values = colores_categorias) +
+    labs(
+      title = paste("Distribución de Certificados en", cod_postal),
+      fill = "Categoría"
+    )
+
+  print(grafico)
+
+  # Devolver tabla resumen
+  df_final %>%
+    select(Categoria, Cantidad, Media_CO2, Porcentaje)
+}
+
+```
+
+# Ejemplo de popup
+
+```{r , echo=FALSE}
+crear_grafico_tarta(
+  tabla_frecuencias = tabla_frecuencias_pivotada,
+  tabla_medias = tabla_medias_pivotada,
+  cod_postal = "46920",
+  colores_categorias = colores_categorias
+)
+```
+
+```{r , echo=FALSE}
+# Crear gráfico usos
+crear_grafico_usos <- function(tabla_usos, cod_postal) {
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  
+
+  # Filtrar la fila del código postal
+  df_usos <- tabla_usos %>% filter(CODIGO_POSTAL == cod_postal)
+
+  if (nrow(df_usos) == 0) {
+    stop("El código postal especificado no se encuentra en la tabla de usos.")
+  }
+
+  # Eliminar columnas no deseadas (CODIGO_POSTAL, MUNICIPIO si existe, Total_Usos si existe)
+  cols_excluir <- intersect(c("CODIGO_POSTAL", "MUNICIPIO", "Total_Usos"), names(df_usos))
+
+  # Convertir a formato largo
+  df_usos_long <- df_usos %>%
+  select(where(is.numeric)) %>%
+  pivot_longer(cols = everything(), names_to = "Uso", values_to = "Cantidad")
+
+
+  # Calcular porcentajes
+  total_usos <- sum(df_usos_long$Cantidad, na.rm = TRUE)
+  df_usos_long <- df_usos_long %>%
+    mutate(Porcentaje = (Cantidad / total_usos) * 100)
+
+  # Crear gráfico de tarta
+  grafico <- ggplot(df_usos_long, aes(x = "", y = Cantidad, fill = Uso)) +
+    geom_bar(stat = "identity", width = 1, color = "black") +
+    coord_polar("y", start = 0) +
+    theme_void() +
+    labs(
+      title = paste("Distribución de Usos en", cod_postal),
+      fill = "Uso del Edificio"
+    )
+
+  print(grafico)
+
+  # Devolver tabla resumen
+  return(df_usos_long %>%
+           arrange(desc(Porcentaje)) %>%
+           select(Uso, Cantidad, Porcentaje))
+}
+```
+
+```{r , echo=FALSE}
+# Crear gráfico de usos para el código postal 46001
+crear_grafico_usos(
+  tabla_usos = tabla_uso_edificio_pivotada,
+  cod_postal = "46001"
+)
+
+names(codigos_postales_mapa_final)
+# Creamos una carpeta donde guardar los CSV si no existe
+if (!dir.exists("data_app_shiny")) {
+  dir.create("data_app_shiny")
+}
+
+# Exportar las tablas como CSV
+write.csv(media_emisiones_co2, "media_emisiones_co2.csv", row.names = FALSE)
+write.csv(tabla_frecuencias_pivotada, "tabla_frecuencias_pivotada.csv", row.names = FALSE)
+write.csv(tabla_medias_pivotada, "tabla_medias_pivotada.csv", row.names = FALSE)
+write.csv(tabla_uso_edificio_pivotada, "tabla_uso_edificio_pivotada.csv", row.names = FALSE)
+
+
+```
+
+# Mapa intecractivo de emisiones de CO2
+
+```{r , echo=FALSE}
+library(shiny)
+library(leaflet)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(sf)
+codigos_postales_mapa_final$EMISIONES_CO2_LETRA <- as.character(codigos_postales_mapa_final$EMISIONES_CO2_LETRA)
+
+# --- Colores letras A-G ---
+colores_categorias <- c(
+  
+  "D" = "#FFEB3B",     # Amarillo
+  "E" = "#FFC107",     # Naranja claro
+  "F" = "#FF5722",     # Naranja oscuro
+  "G" = "#F44336"      # Rojo
+)
+
+# --- Emoji para cada uso ---
+asignar_emoji_uso <- function(uso) {
+  case_when(
+    uso == "Vivienda" ~ "🏠",
+    uso == "Edificio de Viviendas" ~ "🏢",
+    uso == "Oficina" ~ "🏢",
+    uso == "Industrial" ~ "🏭",
+    uso == "Centro de Enseñanza" ~ "🏫",
+    uso == "Hotel" ~ "🏨",
+    uso == "Comercial" ~ "🏬",
+    uso == "Sanidad" ~ "🏥",
+    uso == "Restaurante" ~ "🍽️",
+    uso == "Religioso" ~ "⛪",
+    uso == "Deportivo" ~ "🏟️",
+    uso == "Puerto" ~ "⚓",
+    uso == "Agrario" ~ "🌾",
+    TRUE ~ "📦"
+  )
+}
+
+# --- Crear gráfico de tarta de letras energéticas ---
+crear_grafico_tarta <- function(tabla_frecuencias, tabla_medias, cod_postal, colores_categorias) {
+  df_frecuencias <- tabla_frecuencias %>% filter(CODIGO_POSTAL == cod_postal)
+  df_medias <- tabla_medias %>% filter(CODIGO_POSTAL == cod_postal)
+
+  if (nrow(df_frecuencias) == 0 | nrow(df_medias) == 0) return(NULL)
+
+  df_frecuencias_long <- df_frecuencias %>%
+    select(where(is.numeric)) %>%
+    pivot_longer(cols = everything(), names_to = "Categoria", values_to = "Cantidad")
+
+  df_medias_long <- df_medias %>%
+    select(where(is.numeric)) %>%
+    pivot_longer(cols = everything(), names_to = "Categoria", values_to = "Media_CO2")
+
+  df_final <- left_join(df_frecuencias_long, df_medias_long, by = "Categoria") %>%
+    filter(Categoria %in% names(colores_categorias)) %>%
+    mutate(Porcentaje = (Cantidad / sum(Cantidad, na.rm = TRUE)) * 100)
+
+  ggplot(df_final, aes(x = "", y = Cantidad, fill = Categoria)) +
+    geom_bar(stat = "identity", width = 1, color = "black") +
+    coord_polar("y") +
+    theme_void() +
+    scale_fill_manual(values = colores_categorias) +
+    labs(title = paste("Distribución de Certificados en", cod_postal), fill = "Categoría")
+}
+
+# --- Crear gráfico de tarta de usos simplificados ---
+crear_grafico_usos <- function(tabla_usos, cod_postal) {
+  df_usos <- tabla_usos %>%
+    filter(CODIGO_POSTAL == cod_postal) %>%
+    select(where(is.numeric)) %>%
+    pivot_longer(cols = everything(), names_to = "Uso", values_to = "Cantidad")
+
+  if (nrow(df_usos) == 0 || sum(df_usos$Cantidad) == 0) return(NULL)
+
+  df_usos <- df_usos %>%
+    mutate(Porcentaje = (Cantidad / sum(Cantidad, na.rm = TRUE)) * 100)
+
+  ggplot(df_usos, aes(x = "", y = Cantidad, fill = Uso)) +
+    geom_bar(stat = "identity", width = 1, color = "black") +
+    coord_polar("y") +
+    theme_void() +
+    labs(title = paste("Distribución de Usos en", cod_postal), fill = "Uso")
+}
+
+# --- Interfaz UI ---
+ui <- fluidPage(
+  titlePanel("Mapa de emisiones de CO₂ y usos del suelo en Valencia"),
+  leafletOutput("mapa"),
+  h3("Gráfico de Letras Energéticas"),
+  plotOutput("grafico_tarta"),
+  h3("Gráfico de Usos Simplificados"),
+  plotOutput("grafico_usos"),
+  h3("Tabla resumen de letras energéticas"),
+  tableOutput("tabla_resultados")
+)
+
+# --- Lógica SERVER ---
+server <- function(input, output, session) {
+  # Paleta para colores de polígonos
+  paleta_colores <- colorFactor(
+    palette = colores_categorias,
+    domain = codigos_postales_mapa_final$EMISIONES_CO2_LETRA
+  )
+
+  # Crear variable reactiva para el código postal clicado
+  selected_postal_code <- reactiveVal(NULL)
+
+  # Mapa principal
+  output$mapa <- renderLeaflet({
+    leaflet(codigos_postales_mapa_final) %>%
+      addTiles() %>%
+      addPolygons(
+        fillColor = ~paleta_colores(EMISIONES_CO2_LETRA),
+        color = "black",
+        weight = 1,
+        fillOpacity = 0.7,
+        highlight = highlightOptions(weight = 3, color = "red", fillOpacity = 0.9),
+        layerId = ~CODIGO_POSTAL,
+        popup = ~paste0(
+          "<b>Código Postal:</b> ", CODIGO_POSTAL, "<br>",
+          "<b>Municipio:</b> ", MUNICIPIO_REFERENCIAS, "<br>",
+          "<b>Media CO₂:</b> ", round(Media_Emisiones_CO2, 1), " kg/m²·año<br>",
+          "<b>Letra:</b> ", EMISIONES_CO2_LETRA, "<br>",
+          "<b>Uso predominante:</b> ", asignar_emoji_uso(Uso_Dominante), " ", Uso_Dominante, "<br>",
+          "<b>Total certificados:</b> ", Suma_Total
+        )
+      )
+  })
+
+  # Detectar selección de zona
+  observeEvent(input$mapa_shape_click, {
+    selected_postal_code(input$mapa_shape_click$id)
+  })
+
+  # Gráfico de letras
+  output$grafico_tarta <- renderPlot({
+    req(selected_postal_code())
+    crear_grafico_tarta(
+      tabla_frecuencias_pivotada,
+      tabla_medias_pivotada,
+      selected_postal_code(),
+      colores_categorias
+    )
+  })
+
+  # Gráfico de usos
+  output$grafico_usos <- renderPlot({
+    req(selected_postal_code())
+    # Crear alias para gráfico de usos
+    tabla_uso_simplificado <- tabla_uso_edificio_pivotada
+    crear_grafico_usos(tabla_uso_simplificado, selected_postal_code())
+  })
+
+  # Tabla resumen
+  output$tabla_resultados <- renderTable({
+    req(selected_postal_code())
+
+    df_frec <- tabla_frecuencias_pivotada %>%
+      filter(CODIGO_POSTAL == selected_postal_code()) %>%
+      select(where(is.numeric)) %>%
+      pivot_longer(cols = everything(), names_to = "Categoria", values_to = "Cantidad")
+
+    df_med <- tabla_medias_pivotada %>%
+      filter(CODIGO_POSTAL == selected_postal_code()) %>%
+      select(where(is.numeric)) %>%
+      pivot_longer(cols = everything(), names_to = "Categoria", values_to = "Media_CO2")
+
+    left_join(df_frec, df_med, by = "Categoria") %>%
+      mutate(Porcentaje = (Cantidad / sum(Cantidad)) * 100) %>%
+      select(Categoria, Cantidad, Media_CO2, Porcentaje)
+  })
+}
+
+# Lanzar app
+shinyApp(ui, server)
+
+
+```
+
+### 🗺️ Análisis espacial de emisiones medias de CO₂ por código postal
+
+El siguiente mapa representa la **media de emisiones de CO₂ (kg/m²·año)** de los inmuebles con certificado energético en cada **código postal** de la ciudad de Valencia y alrededores.
+
+> ⚠️ **Importante**:\
+> El color del polígono **no representa el número de certificados**, sino el **valor medio de emisiones** registrado en la zona.
+> Cuanto más oscuro el color, **mayor la media de CO₂** por metro cuadrado.
+
+------------------------------------------------------------------------
+
+### 🏚️ Zonas residenciales con mayores emisiones
+
+-   En el **Cabanyal (46011)** y áreas portuarias, se superan los **30 kg/m²·año** de media.\
+    👉 Esto es coherente con la presencia de **viviendas antiguas y sin rehabilitación energética**.
+
+-   Otras zonas como el **Carmen** o **partes de Russafa** presentan también valores elevados, probablemente debido a **bloques de viviendas envejecidos**.
+
+------------------------------------------------------------------------
+
+### 🏭 Sectores con uso industrial o terciario
+
+-   En áreas como **Paterna (46980, 46988)** las emisiones son elevadas y **coherentes con su uso dominante**:
+    -   **Oficinas**\
+    -   **Naves industriales**\
+    -   **Grandes superficies**
+
+Estas tipologías suelen tener **consumos energéticos mayores**, justificando los valores observados.
+
+------------------------------------------------------------------------
+
+### ✅ Conclusiones del análisis espacial
+
+-   Existen **diferencias claras** entre zonas residenciales, comerciales e industriales.\
+-   Los **barrios más antiguos presentan peores indicadores** de eficiencia energética.\
+-   El análisis permite **identificar prioridades de intervención** y **verificar posibles errores** en la base de datos.
+
+------------------------------------------------------------------------
+
+### Agrupar edificios para identificar los comportamientos en la ciudad de Valencia
+
+Realizar un **clustering jerárquico** que agrupe edificios de Valencia en función de:
+
+-   **Emisiones de CO₂ por m²·año**
+
+-   **Antigüedad del edificio**
+
+-   **Superficie construida**
+
+-   **Uso principal del edificio** (transformado a dummies)
+
+Buscamos **detectar patrones de comportamiento energético** entre edificios con características similares, lo que puede ayudar a:
+
+-   Identificar zonas críticas.
+
+-   Orientar políticas de rehabilitación energética.
+
+-   Relacionar los clusters con otros factores (tráfico, contaminación, etc.).
+
+## Preparado de datos
+
+# Muestra
+
+Debido a la extensión de los datos, se ha decidido hacer una muestra estratificada por uso, y consideramos que es la mejor forma de reducir el tamaño del dataset sin perder representatividad de los diferentes tipos de edificios, para un 99% de confianza y en error +-1% necesitaríamos una muestra de 14988 registros
+
+```{r , echo=FALSE}
+
+# --- 1. Parámetros del muestreo ---
+set.seed(123)  # Fijar semilla para reproducibilidad
+
+n_muestra_total <- 14988  # Tamaño calculado para 99% de confianza y 1% error
+
+# --- 2. Calcular proporciones por tipo de uso ---
+proporciones <- data %>%
+  count(uso_simplificado, name = "n_total") %>%
+  mutate(peso = n_total / sum(n_total),
+         n_muestra = round(peso * n_muestra_total))
+
+# --- 3. Agrupar y dividir datos por uso ---
+grupos <- data %>%
+  filter(uso_simplificado %in% proporciones$uso_simplificado) %>%
+  group_split(uso_simplificado)
+
+# --- 4. Muestreo estratificado exacto por uso ---
+muestra_estratificada <- map2_dfr(
+  grupos,
+  proporciones$n_muestra,
+  ~ slice_sample(.x, n = min(nrow(.x), .y))
+)
+
+```
+
+# Verificar la muestra
+
+Se pensó en hacer una prueba de t de student, pero no tenemos datos que sigan la distribución de normalidad, por lo que se ha decidido hacer una prueba de Wilcoxon, que es más robusta a la no normalidad de los datos.
+
+Hipótesis:
+
+H₀ (nula): la media de la muestra es igual a la media de la población.
+
+H₁ (alternativa): la media de la muestra no es igual a la media de la población.
+
+```{r , echo=FALSE}
+
+# --- 5. Verificar la muestra ---
+# Variables numéricas a comparar
+vars <- c("EMISIONES_CO2_VALOR", "SUPERFICIE_M2", "antiguedad")
+# Realizar la prueba de Wilcoxon para cada variable
+library(dplyr)
+library(purrr)
+library(tibble)
+
+# Variables a comparar
+vars <- c("EMISIONES_CO2_VALOR", "SUPERFICIE_M2", "antiguedad")
+
+# Realizar la prueba de Wilcoxon
+resultados_wilcoxon <- map_dfr(vars, function(var) {
+  # Verifica que la variable existe en ambos dataframes
+  if (!var %in% names(data) || !var %in% names(muestra_estratificada)) {
+    return(tibble(variable = var, p_value = NA, reject_null = NA))
+  }
+
+  # Elimina NA antes de aplicar el test
+  x <- data[[var]]
+  y <- muestra_estratificada[[var]]
+
+  x <- x[!is.na(x)]
+  y <- y[!is.na(y)]
+
+  # Asegúrate de que ambos son numéricos
+  if (!is.numeric(x) || !is.numeric(y)) {
+    return(tibble(variable = var, p_value = NA, reject_null = NA))
+  }
+
+  wilcox_test <- wilcox.test(x, y, paired = FALSE)
+
+  tibble(
+    variable = var,
+    p_value = wilcox_test$p.value,
+    reject_null = wilcox_test$p.value < 0.05
+  )
+})
+
+print(resultados_wilcoxon)
+```
+
+No rechazamos la hipótesis nula, por lo que podemos concluir que la media de muestra es representativa de la población y podemos seguir con nuestro objetivo.
+
+# Crear variable
+
+Calcular antigüedad.
+La edad de un edificio afecta directamente a su comportamiento energético.
+Los edificios más antiguos suelen tener peor aislamiento, instalaciones ineficientes y peores materiales constructivos.
+Usamos 2025 como referencia fija para comparar todos los casos.
+
+```{r , echo=FALSE}
+# --- 5. Calcular antigüedad y escalar variables numéricas ---
+muestra_estratificada <- muestra_estratificada %>%
+  mutate(antiguedad = 2025 - ANYO_CONSTRUCCION)
+
+
+```
+
+# Selección de variables
+
+Incluimos únicamente las variables que aportan información útil al análisis, y eliminamos aquellas observaciones incompletas que podrían distorsionar los resultados (clustering no tolera bien los NA).
+
+EMISIONES_CO2_VALOR: variable clave a estudiar.
+
+Antigüedad: impacto estructural.
+
+SUPERFICIE_M2: tamaño influye en demanda energética.
+
+uso_simplificado: es un determinante del comportamiento del edificio.
+
+```{r , echo=FALSE}
+
+vars_clustering <- muestra_estratificada %>%
+  filter(!is.na(EMISIONES_CO2_VALOR), !is.na(SUPERFICIE_M2), !is.na(antiguedad), !is.na(uso_simplificado)) %>%
+  select(EMISIONES_CO2_VALOR, antiguedad, SUPERFICIE_M2, uso_simplificado)
+
+```
+
+# Codificar la variable categórica uso_simplificado con variables dummy
+
+Los algoritmos de clustering no trabajan directamente con variables categóricas.
+Por eso convertimos cada uso posible en una variable binaria 0/1 (si es de ese tipo o no).
+Esto permite representar diferentes tipos de uso (vivienda, oficina, comercial...) sin orden artificial.
+
+```{r , echo=FALSE}
+
+datos_clustering <- dummy_cols(
+  vars_clustering,
+  select_columns = "uso_simplificado",
+  remove_first_dummy = TRUE,
+  remove_selected_columns = TRUE
+)
+
+```
+
+# Escalado y centrado de variables
+
+Los algoritmos de clustering son sensibles a la escala de las variables.
+Si una variable (como SUPERFICIE_M2) tiene un rango muy alto, dominará la distancia total, anulando el efecto de las demás.
+
+```{r , echo=FALSE}
+datos_scaled <- scale(datos_clustering, center = TRUE, scale = TRUE)
+
+```
+
+# Elegir Distancia
+
+| Distancia | Tipo de datos | ¿Adecuada para tu caso? | Comentario breve |
+|---------------|----------------|---------------|---------------------------|
+| **Euclídea** | Solo numéricas | ❌ Parcialmente | No trata bien las dummies como categóricas |
+| **Manhattan** | Numéricas | ❌ Parcialmente | Más robusta, pero mismo problema |
+| **Gower** | **Mixtos** (num + categóricas) | ✅ **Sí, la mejor opción** | Trata bien variables numéricas y categóricas |
+| Coseno | Numéricas, escala similar | ❌ | Más para texto o vectores dirección |
+| Correlación | Numéricas | ❌ | Para perfiles de comportamiento, no valores brutos |
+
+# Cálculo de clusters ideal
+
+Se ha probado a hacer directamente pero tras 15 min de ejecución se ha decidido hacer un PCA para reducir la cantidad de variables y así acelerar el proceso, como ya no tendremos un dataset mixto utilizaremos la distancia euclidea.
+
+```{r , echo=FALSE}
+
+# Aplicar PCA con centrado y escalado (ya están escaladas, pero por seguridad)
+res_pca <- PCA(datos_scaled, scale.unit = TRUE, ncp = 20, graph = FALSE)
+
+# Visualizar la varianza explicada
+fviz_eig(res_pca, addlabels = TRUE, ylim = c(0, 50))  # Scree plot
+
+# Obtener las componentes principales
+datos_pca <- as.data.frame(res_pca$ind$coord)  # Coordenadas de individuos
+
+# Añadir el uso simplificado para interpretar mejor los clusters
+datos_pca$uso_simplificado <- muestra_estratificada$uso_simplificado
+
+# (Opcional) Visualizar las dos primeras componentes coloreando por uso
+fviz_pca_ind(res_pca,
+             geom.ind = "point",
+             col.ind = datos_pca$uso_simplificado,
+             palette = "jco",
+             addEllipses = TRUE,
+             legend.title = "Uso")
+
+```
+
+Se decide usar para el clustering las 10 componentes principales, ya que explican el 72,4% de la varianza de los datos, no tienen correlación entre ellas .
+En este caso las variables ahora son cuantitavias así que son todas cuantitativas y se puede usar la distancia euclidea.
+La distancia euclidea nos calcula la distancia entre dos puntos de forma geométrica.
+Se ha usado el método de Ward por que se desea minimizar la varianza dentro de cada cluster, lo que es útil para crear grupos homogéneos.
+El método Ward.D2 (que es la versión moderna) agrupa los puntos minimizando el aumento de varianza total al fusionar dos clusters: por lo que agrupa puntos cercanos y tiene en cuenta la forma y dispersión de los grupos.
+
+# Creación Clusters
+
+Se crea otros clusters para poder
+
+```{r , echo=FALSE}
+# --- Librerías necesarias ---
+
+datos_pca <- as.data.frame(res_pca$ind$coord)
+datos_pca_reducido <- datos_pca[, 1:10]  # Solo PC1–PC10
+
+```
+
+```{r , echo=FALSE}
+# --- Paso 3: Determinar el número óptimo de clusters ---
+set.seed(123)
+# --- Paso 2: Calcular la matriz de distancias euclídeas ---
+distancias_pca <- dist(datos_pca_reducido, method = "euclidean")
+
+```
+
+```{r , echo=FALSE}
+
+# --- Paso 3: Aplicar clustering jerárquico con fastcluster y método ward.D2 ---
+hc_fast <- hclust(distancias_pca, method = "ward.D2")
+
+# --- Paso 4: Determinar el número óptimo de clusters visualmente o usando silhouette ---
+# Puedes usar el dendrograma o silhouette:
+#fviz_nbclust(datos_pca_reducido, FUNcluster = hcut, method = "silhouette", k.max = 15)
+```
+
+```{r , echo=FALSE}
+
+# --- Paso 5: Cortar el dendrograma en k clusters ---
+clusters <- cutree(hc_fast, k = 11)
+
+# --- Paso 6: Visualizar los clusters ---
+fviz_cluster(list(data = datos_pca_reducido, cluster = clusters),
+             geom = "point", ellipse.type = "convex",
+             palette = "jco", ggtheme = theme_minimal())
+```
+
+Obsevamos las estadísticas de los 11 clusters
+
+```{r , echo=FALSE}
+# Añadir los clusters al dataset original
+datos_clusterizados <- muestra_estratificada %>%
+  mutate(cluster = factor(clusters))
+
+library(dplyr)
+
+# Estadísticas por cluster (media, mediana, desviación estándar)
+resumen_clusters <- datos_clusterizados %>%
+  group_by(cluster) %>%
+  summarise(
+    n               = n(),
+    media_CO2       = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    mediana_CO2     = median(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    sd_CO2          = sd(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    media_sup       = mean(SUPERFICIE_M2, na.rm = TRUE),
+    mediana_sup     = median(SUPERFICIE_M2, na.rm = TRUE),
+    media_antig     = mean(antiguedad, na.rm = TRUE),
+    mediana_antig   = median(antiguedad, na.rm = TRUE)
+  ) %>%
+  arrange(cluster)
+
+print(resumen_clusters)
+
+# Tabla de usos por cluster
+tabla_usos <- datos_clusterizados %>%
+  group_by(cluster, uso_simplificado) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = uso_simplificado, values_from = n, values_fill = 0)
+
+print(tabla_usos)
+```
+
+Queremos observar el número de edificios por cluster.
+
+```{r , echo=FALSE}
+library(ggplot2)
+
+ggplot(datos_clusterizados, aes(x = cluster, y = EMISIONES_CO2_VALOR, fill = cluster)) +
+  geom_boxplot() +
+  labs(title = "Distribución de emisiones por cluster", y = "kg CO2/m²·año") +
+  theme_minimal()
+
+ggplot(datos_clusterizados, aes(x = cluster, y = SUPERFICIE_M2, fill = cluster)) +
+  geom_boxplot() +
+  labs(title = "Superficie construida por cluster", y = "m²") +
+  theme_minimal()
+
+ggplot(datos_clusterizados, aes(x = cluster, y = antiguedad, fill = cluster)) +
+  geom_boxplot() +
+  labs(title = "Antigüedad por cluster", y = "años") +
+  theme_minimal()
+```
+
+GRUPO 1: representa el comportamiento medio de los edificios en Valencia.
+Predominan las viviendas con valores intermedios de antigüedad y emisiones.
+Su comportamiento energético se puede considerar como "estándar" y puede servir como referencia para comparación con otros grupos.
+
+GRUPO 2: Edificios con mejor comportamiento energético.
+Se basa en centro educativos
+
+GRUPO 3 Agrupa edificios comerciales con necesidades energéticas elevadas.
+La superficie es superior a la del grupo 1 y las emisiones significativamente más altas, lo que apunta a un menor rendimiento energético o mayores necesidades de climatización.
+
+grupo 4: Son edificios grandes y diversos, mayoritariamente públicos, cuya eficiencia varía.
+Su superficie y antigüedad sugieren instalaciones históricas o infraestructuras comunitarias.
+
+GRUPO 5,6 Y 8: Estos grupos agrupan edificios con altas emisiones de CO₂, probablemente debido a su uso (gimnasios, hoteles, edificios mal acondicionados), alta superficie y/o antigüedad, el 6 y 8 tienen emisiones bastante altas.
+
+GRUPO 7: Este grupo contiene viviendas más viejas que el grupo 1 pero contaminan menos, aunque no hay mucha diferencia
+
+GRUPO 9 : son las industrias y en general emisioens algo más alta pero no son muy excesivo
+
+GRUPO 10: Este grupo contiene edificios de oficinas Y sorprendentemente tienen la misma huella de carbono que las industrias.
+
+GRUPO 11: Los restaurantes son de los que más CO2 emiten , lógicamente por el gran horario de servicio que disponen, las cocinas y el tema de climatiazción.
+
+## Otro modelo de clustering
+
+Se va a realizar el clustering tan solo con las emisiones de co2, superfice y antigüedad debido a que el clustering al incluir uso salen directamente los grupos asociados al uso.
+Después se intentará ver si podemos asociarlo a cierto grupo o hay dispersión.
+Se utilizará la distancia euclídea por ser variables numéricas y consideramos que los anómalos no tendran un gran peso.
+
+```{r , echo=FALSE}
+# --- Escalar los datos ---
+datos_numeric <- muestra_estratificada %>%
+  select(EMISIONES_CO2_VALOR, SUPERFICIE_M2, antiguedad)
+
+datos_scaled <- scale(datos_numeric)
+
+# --- Cargar librerías necesarias ---
+library(fastcluster)
+library(factoextra)
+
+# --- Calcular matriz de distancias ---
+dist_euclidea <- dist(datos_scaled, method = "euclidean")
+```
+
+# Seleccionar clusters
+
+```{r , echo=FALSE}
+# --- Método del Codo usando hclust optimizado ---
+
+#fviz_nbclust(
+ # datos_scaled,
+  #FUNcluster = hcut,
+  #method = "wss",
+  #k.max = 10,
+  #hc_method = "ward.D2"
+#3) +
+ # labs(title = "Método del Codo - FastCluster")
+```
+
+```{r , echo=FALSE}
+
+# Método de la Silhouette
+#fviz_nbclust(datos_scaled, FUNcluster = hcut, method = "silhouette", k.max = 10) +
+ # labs(title = "Método de la Silueta - Clustering Jerárquico")
+```
+
+# Visualización
+
+Ambas pruebas nos indican que el número óptimo de clusters es 8, por lo que se decide usar este número.
+
+```{r , echo=FALSE}
+library(fastcluster)
+
+# Clustering jerárquico
+hc <- hclust(dist_euclidea, method = "ward.D2")
+
+# Cortar en k grupos (ajusta según resultado anterior)
+k_optimo <- 8
+grupos <- cutree(hc, k = k_optimo)
+
+
+
+# Añadir clusters al dataset original
+datos_clusterizados <- cbind(muestra_estratificada, cluster = as.factor(grupos))
+
+# Visualizar con las dos primeras variables
+fviz_cluster(list(data = datos_scaled, cluster = grupos),
+             geom = "point", ellipse.type = "convex",
+             palette = "jco", ggtheme = theme_minimal())
+
+```
+
+# Interpretación
+
+```{r , echo=FALSE}
+# Solo si tienes la variable uso_simplificado en tu muestra
+tabla_usos <- datos_clusterizados %>%
+  group_by(cluster, uso_simplificado) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = uso_simplificado, values_from = n, values_fill = 0)
+
+print(tabla_usos)
+```
+
+```{r , echo=FALSE}
+library(dplyr)
+
+# Estadísticas por cluster (media, mediana, desviación estándar)
+resumen_clusters <- datos_clusterizados %>%
+  group_by(cluster) %>%
+  summarise(
+    n               = n(),
+    media_CO2       = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    mediana_CO2     = median(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    sd_CO2          = sd(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    media_sup       = mean(SUPERFICIE_M2, na.rm = TRUE),
+    mediana_sup     = median(SUPERFICIE_M2, na.rm = TRUE),
+    media_antig     = mean(antiguedad, na.rm = TRUE),
+    mediana_antig   = median(antiguedad, na.rm = TRUE)
+  ) %>%
+  arrange(cluster)
+
+print(resumen_clusters)
+
+```
+
+Se observa que el comportamiento del cluster 1 sigue el patrón normal de las emisiones de CO2 de zonas de la ciudad donde no hay un exceso de emisiones, lo que sería el comportamiento habitual del conjunto de la ciudad está formado por la mayoría de edificios de viviendas, oficinas, y sobre todo viviendas.
+
+El grupo 2 tiene un comportamiento similar al grupo 1 pero con una media de emisiones de CO2 más baja, lo que podría indicar que son edificios más nuevos o con mejores características energéticas, destacan los colegios, que serán de creación reciente; y es el segundo con más viviendas lo que podría significar que son de nueva contrucción y por eso en el grupo de más bajas emisiones, si vemos la antigüedad es la más baja de todos los grupos, confirma que son los más novedosos y con grandes mejoras de eficiencia energética que el resto.
+
+El grupo 3 tiene un comportamiento similar al grupo 1 pero con una media de emisiones de CO2 más alta, lo que podría indicar que son edificios más antiguos o con peores características energéticas, destaca la presencia de industrias, la cantidad de colegios se podría deber debido a su alta necesidad energética por ser espacio muy grandes y antigüamente no se invirtía tanto en eso, algo parecido ocurre con los gimnasios o centros deportivos son lugares en los que las personas están haciendo un esfuerzo físico y se tiene que climatizar las zonas y con mayor intensidad en especial en verano, es por eso que es lógico que este grupo tenga una media de superficie bastante alta y también destacan los hoteles que tienen un gasto energético superior a la media de edificios.
+
+El grupo 4 destacan las viviendas viejas por ello mayor las emisiones de CO2.
+
+El grupo 5 diría que son edificios y viviendas muy antiguos y a pesar de no tener buen aislamiento no cuentan con instalaciones de climatización y no emiten dicho gas y hay que añadir que hay un edificio del puerto, esto nos ayuda a entender que no emiten tanto CO2, cuando se limpiaron los datos se observó que la mayoría de lugares del puerto que estaban certificados eran naves de almacenamiento y no tenían apenas emisiones.
+
+El grupo 6 tiene las peores emisiones de CO2, es un conjunto de todo, diría que son los peores en cuanto emisiones de co2 de cada uso de edificio.
+
+El grupo 7 son hoteles, viviendas recientes pero diría que de peor calidad constructiva que las del grupo 2, y también hay oficinas y hoteles de las mismas características.
+
+Finalmente el grupo 8 solo cuenta con un individuo y difiere del resto por su gran superficie, se trata de algo comercial, por la superficie diria un centro comercial.
+
+```{r , echo=FALSE}
+library(ggplot2)
+
+ggplot(datos_clusterizados, aes(x = cluster, y = EMISIONES_CO2_VALOR, fill = cluster)) +
+  geom_boxplot() +
+  labs(title = "Distribución de emisiones por cluster", y = "kg CO2/m²·año") +
+  theme_minimal()
+
+ggplot(datos_clusterizados, aes(x = cluster, y = SUPERFICIE_M2, fill = cluster)) +
+  geom_boxplot() +
+  labs(title = "Superficie construida por cluster", y = "m²") +
+  theme_minimal()
+
+ggplot(datos_clusterizados, aes(x = cluster, y = antiguedad, fill = cluster)) +
+  geom_boxplot() +
+  labs(title = "Antigüedad por cluster", y = "años") +
+  theme_minimal()
+
+```
+
+Al observar las distribuciones de los cluster por variables vemos que en cuanto emisiones es cierto que los 5 primeros grupos tienen un comportamiento similar , que es lo que encontramos de media en la ciduad según el plot de emisiones de codigo postal, y se ve el resto que son superiores.
+En cuanto a superficie es lo que hemos dicho el 3 son edificios muy grnades y sobre todo en antiguedad si que se puede apreciar diferentes grupos.
+
+✅ Conclusiones generales sobre el comportamiento energético de los edificios de Valencia Predominio del comportamiento estándar y eficiente en la mayoría de los edificios
+
+El grupo 1, mayoritario, representa el patrón habitual de emisiones de CO₂ en Valencia.
+Se compone sobre todo de viviendas y oficinas con emisiones moderadas, lo que refleja el comportamiento energético típico de la ciudad.
+
+El grupo 2 destaca por tener las emisiones más bajas, asociadas a edificios más recientes, especialmente colegios y viviendas de nueva construcción, con mejor eficiencia energética y menor antigüedad.
+
+Presencia de grupos con mayor impacto energético
+
+El grupo 3 presenta emisiones más elevadas, con una composición marcada por industrias, centros deportivos, colegios antiguos y hoteles.
+Este grupo concentra usos con mayor demanda energética y construcciones más antiguas y menos eficientes.
+
+El grupo 4 y grupo 6 incluyen viviendas envejecidas y un conjunto heterogéneo de edificios con las peores cifras de CO₂, respectivamente.
+Esto apunta a la existencia de zonas vulnerables energéticamente que podrían ser prioritarias en políticas de rehabilitación.
+
+Casos especiales con patrones propios
+
+El grupo 5 edificios muy antiguos pero con bajas emisiones, posiblemente por ausencia de climatización o funciones de almacenamiento sin consumo energético relevante (ej. naves en el puerto) y otros que  han sido reformados.
+
+El grupo 7 se compone de viviendas y hoteles relativamente recientes pero con peor comportamiento energético, posiblemente por materiales de baja calidad o mala eficiencia constructiva.
+
+El grupo 8 representa un outlier, probablemente un centro comercial de gran superficie, cuyas características lo diferencian completamente del resto.
+
+### Analizar la inflencia
+
+Se agrupan los datos por parcelas catastrales y reorganizamos las categorías de uso para que sean más comprensibles, se suma superficies y se calcula la media de emisiones de co2.
+Se busca estudiar la posible inlfuencia del CO2 a los contaminantes.
+
+```{r , echo=FALSE}
+# Agrupar por parcelas catastrales
+data_parcelas <- data %>%
+  group_by(parcela_catastral) %>%
+  summarise(
+    EMISIONES_CO2_VALOR = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    SUPERFICIE_M2        = sum(SUPERFICIE_M2, na.rm = TRUE),
+    antiguedad           = 2025 - mean(ANYO_CONSTRUCCION, na.rm = TRUE),
+    lat                  = mean(lat, na.rm = TRUE),
+    lon                  = mean(lon, na.rm = TRUE),
+    CODIGO_POSTAL        = first(CODIGO_POSTAL),
+    uso_agregada = case_when(
+      any(uso_simplificado %in% c("Industrial"))                        ~ "Industrial",
+      any(uso_simplificado %in% c("Comercial", "Oficina"))             ~ "Comercial",
+      any(uso_simplificado %in% c("Vivienda", "Edificio de Viviendas"))~ "Residencial",
+      any(uso_simplificado %in% c("Sanitario", ""))                    ~ "Sanitario",
+      any(uso_simplificado %in% c("Centro de Enseñanza"))              ~ "Centro de Enseñanza",
+      any(uso_simplificado %in% c("Hotel"))                            ~ "Hotel",
+      any(uso_simplificado %in% c("Cultural", "Religioso"))            ~ "Cultural/Religioso",
+      any(uso_simplificado %in% c("Deportivo"))                        ~ "Deportivo",
+      any(uso_simplificado %in% c("Restaurante"))                      ~ "Restaurante",
+      TRUE                                                             ~ "Otros"
+    )
+  ) %>%
+  ungroup()
+
+
+```
+
+```{r , echo=FALSE}
+head(data_parcelas,10)
+
+```
+
+Se va a realizar un clustering para poder estudiar el comportamiento de los edificios de VALENCIA, del estilo al anterior pero esto es en conjunto
+
+## Modelo con parcelas
+
+Se va a realizar el clustering con las parcelas tan solo con las emisiones de co2, superfice y antigüedad debido a que el clustering al incluir uso salen directamente los grupos asociados al uso.
+
+```{r , echo=FALSE}
+# --- Escalar los datos ---
+datos_numeric <- data_parcelas%>%
+  select(EMISIONES_CO2_VALOR, SUPERFICIE_M2, antiguedad)
+
+datos_scaled <- scale(datos_numeric)
+
+# --- Cargar librerías necesarias ---
+library(fastcluster)
+library(factoextra)
+
+# --- Calcular matriz de distancias ---
+dist_euclidea <- dist(datos_scaled, method = "euclidean")
+```
+
+# Seleccionar clusters
+
+```{r , echo=FALSE}
+
+# 2. Cargar librerías
+library(factoextra)
+
+# 3. Determinar número óptimo de clusters (Método del Codo)
+#set.seed(123)
+#fviz_nbclust(datos_scaled, kmeans, method = "wss", k.max = 10) +
+  #labs(title = "Método del Codo - K-means")
+```
+
+```{r , echo=FALSE}
+# --- Método de la Silhouette ---
+#set.seed(123)
+#fviz_nbclust(datos_scaled, kmeans, method = "silhouette", k.max = 10) +
+ # labs(title = "Método de la Silhouette - K-means")
+```
+
+Han salido 7 clusters como lo óptimo
+
+```{r , echo=FALSE}
+# Elegimos k
+set.seed(123)
+k_opt <- 7
+kmeans_result <- kmeans(datos_scaled, centers = k_opt, nstart = 25)
+
+# Añadir cluster al dataframe original
+data_parcelas$cluster_kmeans <- factor(kmeans_result$cluster)
+```
+
+# Visualización de los clusters
+
+```{r , echo=FALSE}
+fviz_cluster(kmeans_result, data = datos_scaled,
+             geom = "point",
+             ellipse.type = "convex",
+             ggtheme = theme_minimal())
+
+```
+# Análisis de los clusters obtenidos
+
+```{r , echo=FALSE}
+
+# 2. Estadísticas descriptivas por cluster
+library(dplyr)
+
+estadisticas_clusters <- data_parcelas %>%
+  group_by(cluster_kmeans) %>%
+  summarise(
+    n = n(),
+    
+    media_CO2        = mean(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    mediana_CO2      = median(EMISIONES_CO2_VALOR, na.rm = TRUE),
+    
+    media_superficie = mean(SUPERFICIE_M2, na.rm = TRUE),
+    mediana_superficie = median(SUPERFICIE_M2, na.rm = TRUE),
+    
+    media_antiguedad = mean(antiguedad, na.rm = TRUE),
+    mediana_antiguedad = median(antiguedad, na.rm = TRUE)
+  )
+
+print(estadisticas_clusters)
+
+# Distribución por uso agregado en cada cluster
+distribucion_uso <- data_parcelas %>%
+  group_by(cluster_kmeans, uso_agregada) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = uso_agregada, values_from = n, values_fill = 0)
+
+print(distribucion_uso)
+
+
+head(data_parcelas,10)
+
+
+```
+
+GRUPO 1: Agrupa edificios de caracter comecial con una superficie media 73000 m2, tienen una antigüedad media de 31 años , aunque la mediana es de 23 años, por lo que son edificios relativamente nuevos , tienen unas emisiones bajas si lo comparamos con el resto de clusters, hablamos de 28kg de CO2 por m2 al año, lo que es un comportamiento energético medio .
+Edificios con superficie grande pero emsiones están en torno a la media por m2.
+
+GRUPO 2: Destacan los edificios de caracter residencial con una antigüedad de 57 años y un alto porcentaje de hoteles.
+Descatan también los restaurantes, todos estos tienen unas emisiones altas 62.94658 kg de CO2 por m2 al año, lo que es un comportamiento energético poco eficiente y seguramente sea debido a su antigüedad y a que no se han realizado reformas de mejora energética.
+En conclusión, Edificios algo antiguos con altas emisiones de CO2
+
+GRUPO 3: Tienen emisiones bajas, tienen una antigüedad media de 25 años, se tratan de un buen porcentaje de los colegios centro deportivos, también destaca los colegios,viviendas y restaurantes. Por lo tanto, son edificios nuevos con emisiones bajas, hablamos de 22 kg por m2 al año.
+
+GRUPO 4: Agrupa a la mayor cantidad de parcelas catastrales, hablamos de edificios de 58 años con emisiones en torno a la media sobre 30 .
+Pertenecen a este grupo gran parte de los comercios, industriales y los restautantes y los colegios y sibre todo residenciales.
+Edificios normales (lo habitual), emisiones medio-altas.
+
+GRUPO 5: Un grupo bastante genérico con un comportamiento similar al grupo 4, pero con una antigüedad media de 100 años .
+Edificios viejos con emisiones medias.
+
+GRUPo 6: Edificios que han realizado mejoras energéticas seguramente, esto se explica a su antigÜedad (43 años de media) y a sus bajas emisiones.
+Destacan comercios, y viviendas.
+Edificios reformados.
+
+GRUPO 7: Casos extremos con emisiones muy por encima, tienen una media de 400 kg/m2 al año , se tratan de comercios y residenciales, tienen una antiguedad de 88 años. 
+
+En resumen:
+
+🔹 Cluster 1: 🟨 "Grandes edificios recientes con eficiencia media"
+
+🔹 Cluster 2: 🟥 "Edificios antiguos con alta ineficiencia"
+
+🔹 Cluster 3: 🟩 "Edificios nuevos y diversos con alta eficiencia energética"
+
+🔹 Cluster 4: 🟦 "Edificios con poca antiguedad con eficiencia media"
+
+🔹 Cluster 5: ⬛ "Edificios muy antiguos con eficiencia moderada"
+
+🔹 Cluster 6: 🟧 "Edificios reformados con buena eficiencia energética"
+
+🔹 Cluster 7: 🟥 "Casos extremos de ineficiencia energética"
+
+Como hemos podido identificar el comportamiento de los edificios vamos a proceder a realizar un clustering geográfico para ver si hay zonas homogéneas en cuanto a emisiones de CO2 y así poder relacionarlo con las zonas que estudian cada estación de contaminación.
+
+### Mapa geográfico y la distribución de las coordenadas
+
+Se agruparan los edificios en torno a las coordenadas de las estaciones de contaminación, para ver si hay zonas homogéneas en cuanto a emisiones de CO2 y así poder relacionarlo con los contaminantes.
+Se realizará un clustering basado en gemotría de Varonoi
+
+```{r , echo=FALSE}
+
+
+# Filas con lat o lon faltantes
+filas_malas <- data_parcelas %>%
+  filter(is.na(lat) | is.na(lon))
+
+# Mostrar las primeras filas problemáticas
+head(filas_malas)
+
+# Contar cuántas hay
+nrow(filas_malas)
+data_parcelas <- data_parcelas %>%
+  filter(!is.na(lat) & !is.na(lon))
+
+sum(data_parcelas$cluster_kmeans == 7)
+head(data_parcelas,10)
+
+#Volvemos a eliminar las filas mal geolocalizadas por si no han sido eliminadas 
+
+referencias_a_eliminar <- c(
+  "46246A03300153", "5481413YJ2658A", "6462907YJ2766A", "46246A02700129", "46246A02500187",
+  "46246A03001172", "4155617YJ2745E", "46246A03000417", "7173219YJ1677S", "46246A02600336",
+  "5574209YJ2657S", "46246A03001226", "7728122YJ2772H", "5912335YJ2751B", "6212322YJ2761C",
+  "46246A02600652", "46246A03001304", "6520819YJ2762B", "46246A03100108", "4723124YJ1742S",
+  "5583104YJ1758S", "2428811YJ2722N", "46246A02600539", "6519422YJ2761H", "46246A02700106",
+  "4045808YJ2644N", "9826603YJ2792F", "46246A03001029", "46246A00900243", "8485807YJ1688N",
+  "5738220YJ2753H", "46246A02900017", "2431707YJ2723S", "4523104YJ1742S", "46246A03000069",
+  "7932211YJ2773D", "7913208YJ1871S", "46246A03000108", "7365530YJ1676N", "5773116YJ1657S",
+  "002040900YJ06F", "46246A04700031", "5913108YJ2751D", "5482503YJ1658S", "5944120YJ2754D",
+  "46246A03200101", "46246A03200160", "5247418YJ2754G", "7624409YJ2772D", "9307111YJ2790E",
+  "7612310YJ1871S", "46246A02600558", "46246A03001362", "46246A03001105", "5292113YJ1759S",
+  "6943313YJ2764D", "6682110YJ1768S", "4338605YJ2743G", "6017411YJ2761E", "46246A02600472",
+  "5571365YJ2657S", "46246A03200170", "46246A04800018", "9622315YJ2792D", "4655810YJ2745F",
+  "7975108YJ1677N", "5384708YJ1758S", "5586718YJ1758N", "46246A04800152", "5172805YJ2657S",
+  "46246A04900042", "46246A03000901", "2068514YJ2726N", "46246A03000794", "9940302YJ2794B",
+  "9626418YJ2792F", "46246A04600140", "46246A03200074", "7612308YJ1871S", "46246A03001411",
+  "8223722YJ2782C", "46246A03001317", "5583108YJ1758S", "8390608YJ1689S", "5582907YJ1758S",
+  "46246A00100105", "5841220YJ2754B", "9937621YJ2793F", "2877916YJ2627N", "7520614YJ2772B",
+  "46246A02600453", "46246A03001107", "46246A03200158", "46246A02900100", "2263112YJ2726S",
+  "46246A00200424", "46246A05200099", "46246A02900107", "46246A02600470", "9415316YJ2791E",
+  "3645213YJ2634N", "4220318YJ2742A"
+)
+data_parcelas <- data_parcelas %>%
+  filter(!parcela_catastral %in% referencias_a_eliminar)
+
+```
+
+
+
+
+```{r , echo=FALSE}
+# app.R
+# app.R
+
+# Sensores (con columnas: Estación, Latitud, Longitud)
+sensores <- read.csv("estaciones_valencia.csv") %>%
+  rename(lat = Latitud, lon = Longitud, nombre = Estación)
+
+
+library(shiny)
+library(leaflet)
+library(sf)
+library(dplyr)
+library(RColorBrewer)
+library(ggplot2)
+
+# ============================
+# CARGA Y PREPARACIÓN DE DATOS
+# ============================
+
+# Leer datos
+sensores <- read.csv("estaciones_valencia.csv") %>%
+  rename(lat = Latitud, lon = Longitud, nombre = Estación)
+
+sensores_sf <- st_as_sf(sensores, coords = c("lon", "lat"), crs = 4326)
+sensores_utm <- st_transform(sensores_sf, 3857)
+
+# Crear Voronoi
+voronoi_pol <- st_voronoi(st_union(sensores_utm))
+voronoi_pol <- st_collection_extract(voronoi_pol)
+voronoi_sf <- st_sf(geometry = voronoi_pol) %>%
+  st_join(sensores_utm) %>%
+  st_transform(4326)
+
+
+
+etiquetas <- c(
+  "1" = "Grandes edificios  recientes con eficiencia media",
+  "2" = "Edificios antiguos con alta ineficiencia",
+  "3" = "Edificios nuevos y diversos con alta eficiencia energética",
+  "4" = "Edificios con poca antiguedad con eficiencia media",
+  "5" = "Edificios muy antiguos con eficiencia moderada",
+  "6" = "Edificios reformados con buena eficiencia energética",
+  "7" = "Casos extremos de ineficiencia energética"
+)
+
+data_parcelas$clase_energetica <- etiquetas[as.character(data_parcelas$cluster_kmeans)]
+edificios_sf <- st_as_sf(data_parcelas, coords = c("lon", "lat"), crs = 4326)
+edificios_sensor <- st_join(edificios_sf, voronoi_sf["nombre"])
+# Añadir el nombre del sensor más cercano a data_parcelas
+data_parcelas$sensor_cercano <- edificios_sensor$nombre
+# Calcular emisiones por zona (toneladas)
+emisiones_por_sensor <- edificios_sensor %>%
+  mutate(emisiones_total = SUPERFICIE_M2 * EMISIONES_CO2_VALOR / 1000) %>%
+  group_by(nombre) %>%
+  summarise(emisiones_totales = round(sum(emisiones_total, na.rm = TRUE), 1))
+
+# Unir al voronoi
+voronoi_sf <- left_join(voronoi_sf, st_drop_geometry(emisiones_por_sensor), by = "nombre")
+
+
+# Paletas
+pal_sensores <- colorFactor(brewer.pal(8, "Set2"), domain = sensores$nombre)
+pal_cluster <- colorFactor(brewer.pal(7, "Set1"), domain = unique(data_parcelas$clase_energetica))
+
+# ============================
+# UI
+# ============================
+
+ui <- fluidPage(
+  titlePanel("Mapa energético de edificios y sensores de València"),
+  sidebarLayout(
+    sidebarPanel(
+      textOutput("titulo_sensor"),
+      plotOutput("grafico_sensor"),
+      htmlOutput("leyenda_sensor")
+    ),
+    mainPanel(
+      leafletOutput("mapa", height = "800px")
+    )
+  )
+)
+
+# ============================
+# SERVER
+# ============================
+
+server <- function(input, output, session) {
+  # Valor reactivo para almacenar el sensor clicado
+  sensor_seleccionado <- reactiveVal(NULL)
+
+  observeEvent(input$mapa_shape_click, {
+    sensor <- input$mapa_shape_click$id
+    sensor_seleccionado(sensor)
+  })
+
+  output$titulo_sensor <- renderText({
+    req(sensor_seleccionado())
+    paste("Sensor seleccionado:", sensor_seleccionado())
+  })
+
+  output$grafico_sensor <- renderPlot({
+    req(sensor_seleccionado())
+
+    datos <- edificios_sensor %>% filter(nombre == sensor_seleccionado())
+    if (nrow(datos) == 0) return(NULL)
+
+    tabla <- datos %>% count(clase_energetica, name = "n") %>%
+      mutate(prop = round(100 * n / sum(n), 1))
+
+    barplot(
+      tabla$n,
+      names.arg = tabla$clase_energetica,
+      las = 2,
+      col = brewer.pal(7, "Set1")[seq_len(nrow(tabla))],
+      main = "Distribución por eficiencia energética",
+      horiz = TRUE,
+      cex.names = 0.7,
+      cex.axis = 0.8,
+      cex.main = 1.1
+    )
+  })
+
+  output$leyenda_sensor <- renderUI({
+    req(sensor_seleccionado())
+    datos <- edificios_sensor %>% filter(nombre == sensor_seleccionado())
+    if (nrow(datos) == 0) return(NULL)
+
+    tabla <- datos %>% count(clase_energetica, name = "n") %>%
+      mutate(prop = round(100 * n / sum(n), 1))
+
+    colores <- brewer.pal(7, "Set1")[seq_len(nrow(tabla))]
+
+    HTML(paste0(
+      "<ul style='padding-left: 0px; list-style: none;'>",
+      paste0("<li><span style='display:inline-block;width:12px;height:12px;background-color:", colores, ";margin-right:5px;'></span>",
+             tabla$clase_energetica, ": <b>", tabla$prop, "%</b></li>"),
+      "</ul>"
+    ))
+  })
+
+  output$mapa <- renderLeaflet({
+    leaflet() %>%
+      addTiles() %>%
+      addPolygons(
+        data = voronoi_sf,
+        layerId = ~nombre,
+        fillColor = ~pal_sensores(nombre),
+        color = "black",
+        weight = 1,
+        fillOpacity = 0.2,
+        label = ~paste0(nombre, "\nEmisiones: ", emisiones_totales, " t CO₂/año")
+      ) %>%
+      addCircleMarkers(
+        data = edificios_sensor,
+        radius = 3,
+        color = ~pal_cluster(clase_energetica),
+        stroke = FALSE,
+        fillOpacity = 0.9
+      )
+  })
+}
+
+# ============================
+# LANZAR APP
+# ============================
+
+shinyApp(ui = ui, server = server)
+
+
+```
+
+## CONCLUSIONES POR REGIONES 
+
+Se ha realizado un clustering geográfico de los edificios de Valencia, agrupando las coordenadas de los edificios en torno a las estaciones de contaminación.
+
+1. Valencia- Pista de Silla 
+Emisiones totales: 1.430.974 toneladas CO₂/año
+
+Características: Esta región se presenta como el punto más crítico en cuanto a impacto climático. La gran mayoría de sus edificaciones son antiguas, con altos niveles de ineficiencia energética. A pesar de la presencia de algunos edificios reformados, el volumen global de construcciones con bajo rendimiento energético hace que las emisiones totales sean extremadamente elevadas.Tenemos que redordar que es la parte de más certificados se han presentado , por la gran presencia del mercado mobiliario o para mejorarlos eficentemente.
+
+
+2. València - Molí del Sol
+Emisiones totales: 1.061.190 toneladas CO₂/año
+
+Molí del Sol también destaca por un volumen de emisiones muy alto. La mayoría de los edificios son antiguos y carecen de actuaciones significativas de mejora energética. La baja proporción de edificaciones nuevas o reformadas evidencia una situación de estancamiento urbano.
+
+3. Torrent - El Vedat
+Emisiones totales: 625.183 toneladas CO₂/año
+
+Características: Se trata de una zona con un perfil mixto, en el que conviven edificios muy antiguos, construcciones comerciales y una cierta presencia de eficiencia media. Las emisiones son elevadas, aunque no extremas.
+
+
+4.Valenica- Politecnic
+Emisiones totales: 615.600 toneladas de CO₂/año
+Esta zona, vinculada en parte al ámbito universitario y de servicios públicos, presenta una infraestructura antigua con bajo nivel de renovación. La eficiencia energética media es deficiente, y escasea la presencia de edificios nuevos .
+
+
+5. Quart de Poblet
+Emisiones totales: 542.559 toneladas de CO₂/año
+Se observa una fuerte concentración de edificios antiguos, con pocos signos de mejora energética reciente. Aunque el volumen total de emisiones no es tan alto como en otras zonas, el perfil urbano muestra una eficiencia estancada.
+
+
+6. València - Av. França
+Emisiones totales: 361.143 toneladas de CO₂/año
+Zona con un parque inmobiliario envejecido  pero con una eficiencia que está en la media, también tiene un buen % de edificios nuevos o con grandes mejroas energéticas. 
+
+
+7. Massanassa
+Emisiones totales: 282.906 toneladas de CO₂/año
+Zona de carácter marcadamente comercial e industrial, donde predominan edificaciones de eficiencia energética media o baja, debido a que un % han sido reformados. 
+
+
+
+8. València Port Moll Transports Ponent
+Emisiones totales: 95.816,7 toneladas de CO₂/año
+
+Predominan edificios antigüos uanque toma mucho peso también la parte de los reformados siendo muy eficientes. Los nivles de emisiones son moderados pero si se tuviera en cuenta otras acciones la zona de puerto debería de ser de los que más co2 emiten. 
+
+9. València Port llit antic Túria
+Emisiones totales: 80.123 toneladas de CO₂/año
+Zona histórica con baja densidad de emisiones. Pero es debido a la poca concentración de edificaciones residenciales, estas zonas realemente tienen muchas emisiones de CO2 por las combustiones genradas en el puerto pero en los CEE no se tienen en cuenta, los edificios de la zona puesto son solo almacenes con baja emisiones. 
+
+
+
+
+
+### Mapa estudio contaminación-CO2
+
+```{r , echo=FALSE}
+# Estructura inicial de la app con pestañas para analizar contaminantes por región
+library(shiny)
+library(leaflet)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+
+# Cargar dataset de calidad del aire
+contaminantes_df <- read.csv("Calidad_Aire_limpio.csv")
+contaminantes_df$FechaHora <- as.POSIXct(contaminantes_df$FechaHora, format="%Y-%m-%d %H:%M:%S")
+
+# UI
+ui <- navbarPage("Mapa interactivo de contaminantes",
+
+  tabPanel("Mapa de calor por contaminante",
+    sidebarLayout(
+      sidebarPanel(
+        selectInput("contaminante", "Selecciona contaminante:",
+                    choices = c("NO", "NO2", "NOx", "O3", "PM10", "PM2.5", "SO2")),
+        helpText("Muestra la media total del contaminante por región Voronoi.")
+      ),
+      mainPanel(
+        leafletOutput("mapa_calor", height = "800px")
+      )
+    )
+  )
+)
+
+# SERVER
+server <- function(input, output, session) {
+
+  # Cálculo de suma anual del contaminante seleccionado por zona
+  datos_anuales <- reactive({
+    req(input$contaminante)
+    contaminantes_df %>%
+      filter(format(FechaHora, "%Y") == "2023") %>%
+      group_by(Origen) %>%
+      summarise(valor_total = sum(.data[[input$contaminante]], na.rm = TRUE))
+  })
+
+  # Render del mapa de calor
+  output$mapa_calor <- renderLeaflet({
+    datos <- datos_anuales()
+    mapa <- left_join(voronoi_sf, datos, by = c("nombre" = "Origen"))
+    paleta <- colorNumeric("YlOrRd", domain = mapa$valor_total)
+
+    leaflet() %>%
+      addTiles() %>%
+      addPolygons(
+        data = mapa,
+        fillColor = ~paleta(valor_total),
+        color = "black",
+        weight = 1,
+        fillOpacity = 0.7,
+        label = ~paste0(nombre, ": ", round(valor_total, 1)),
+        highlightOptions = highlightOptions(weight = 3, fillOpacity = 0.9)
+      ) %>%
+      addLegend("bottomright", pal = paleta, values = mapa$valor_total,
+                title = paste("Suma 2023 -", input$contaminante),
+                opacity = 1)
+  })
+}
+
+# EJECUCIÓN
+shinyApp(ui, server)
+
+
+```
+
+```{r , echo=FALSE}
+head(data_parcelas,10)
+```
+
+Al comparar con los certificados energéticos podemos observar discrepancias pero tienen sentido , de los cee solo hay de los diferentes edificios mientras que los sensores de contaminación miden el valor que hay en el aire en un momento dado, el co2 de los diferentes inmuebles se emite debido al uso de aparatos de refiregereacion y climatización, calentar el agua, cocinar por lo que los niveles más altos serán de 7-9 de la mañana (para calentar el agua), de 11 a 18 de la tarde en verano(aire acondicionados) y en inviertno de 19 a 23 horas por la calefacción. 
+
+Las emisiones de NO son superiores en la zona del puerto seguramente por las emisiones de los barcos, sin embargo edificio apenas emiten co2 pq no hay muchos por esta zona del casco antiguo si es una de los prinicpales emisoras de este gas y tambien de las zonas que más emiten co2 en la ciudad 
+
+
+Respecto al no2 vemos que es más emitido en feneral en toda la ciudad el puesto ya está solo, vemos zpoonas industriales como paterna y el casco por lo que podria tener relaci´pon con el co2
+
+
+
+El o3 si que tiene un gran peso en Valenica excepto en la parte del puerto bajo. 
+
+El PM10 destaca en paterna , industias 
+
+# Calcular la matriz de dcorrelaciones person
+
+```{r , echo=FALSE}
+library(dplyr)
+library(ggplot2)
+
+# 1. Emisiones totales por zona desde edificios
+emisiones_zona <- data_parcelas %>%
+  mutate(emisiones = EMISIONES_CO2_VALOR * SUPERFICIE_M2) %>%
+  group_by(sensor_cercano) %>%
+  summarise(total_CO2 = sum(emisiones, na.rm = TRUE))
+
+# 2. Medias anuales de contaminantes por zona
+contaminantes_medias <- contaminantes_df %>%
+  filter(format(FechaHora, "%Y") == "2023") %>%
+  group_by(Origen) %>%
+  summarise(across(c(NO, NO2, NOx, O3, PM10, PM2.5, SO2), mean, na.rm = TRUE)) %>%
+  rename(sensor_cercano = Origen)
+
+# 3. Unir ambas (solo zonas con ambos datos)
+zonas_completas <- inner_join(emisiones_zona, contaminantes_medias, by = "sensor_cercano")
+
+# 4. Calcular correlaciones entre total_CO2 y cada contaminante
+correlaciones <- sapply(names(zonas_completas)[-c(1, 2)], function(cont) {
+  cor(zonas_completas$total_CO2, zonas_completas[[cont]], use = "complete.obs")
+})
+
+# 5. Mostrar como tabla
+cor_df <- data.frame(
+  Contaminante = names(correlaciones),
+  Pearson = round(correlaciones, 3)
+)
+
+print(cor_df)
+
+# 6. Gráfico de barras
+ggplot(cor_df, aes(x = Contaminante, y = Pearson)) +
+  geom_col(fill = "darkorange") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylim(-1, 1) +
+  labs(title = "Correlación entre emisiones de CO₂ y contaminantes (por zonas)",
+       y = "Coeficiente de Pearson", x = "Contaminante") +
+  theme_minimal()
+
+
+
+```
+NO, NO2, NOx, PM10, PM2.5, SO2 → Tienen correlación negativa o casi nula con CO₂ → en zonas con más CO₂ (edificios grandes), no hay necesariamente más contaminantes. Puede ser que sean zonas más periféricas o industriales con menos densidad urbana.
+
+El CO₂ no genera O₃ directamente, pero al contribuir al calentamiento y a la intensidad de la radiación UV, favorece las condiciones en las que el ozono troposférico se forma y acumula, especialmente en entornos urbanos soleados.
+
+
+# Análisis contamianntes medias horarias verano e invierno
+
+```{r , echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# Asegúrate del formato de fecha
+contaminantes_df$FechaHora <- as.POSIXct(contaminantes_df$FechaHora, format = "%Y-%m-%d %H:%M:%S")
+
+# Crear carpeta si no existe
+if (!dir.exists("graficas_estacionales")) {
+  dir.create("graficas_estacionales")
+}
+
+# Listado de zonas
+zonas_validas <- unique(na.omit(contaminantes_df$Origen))
+
+for (zona in zonas_validas) {
+  df_zona <- contaminantes_df %>%
+    filter(Origen == zona) %>%
+    mutate(
+      Mes = as.numeric(format(FechaHora, "%m")),
+      Hora = as.numeric(format(FechaHora, "%H")),
+      Estacion = case_when(
+        Mes %in% c(6, 7, 8, 9) ~ "Verano",
+        Mes %in% c(11, 12, 1, 2) ~ "Invierno",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(Estacion))
+
+  if (nrow(df_zona) < 50) next  # Saltar si hay pocos datos
+
+  # Calcular medias por hora y estación
+  medias_horarias <- df_zona %>%
+    group_by(Estacion, Hora) %>%
+    summarise(across(c(NO, NO2, NOx, O3, PM10, PM2.5, SO2), mean, na.rm = TRUE), .groups = "drop") %>%
+    pivot_longer(-c(Estacion, Hora), names_to = "Contaminante", values_to = "Valor")
+
+  for (est in c("Verano", "Invierno")) {
+    df_plot <- medias_horarias %>% filter(Estacion == est)
+
+    if (nrow(df_plot) == 0) next
+
+    g <- ggplot(df_plot, aes(x = Hora, y = Valor, color = Contaminante)) +
+      geom_line(size = 1.2) +
+      labs(
+        title = paste("Patrón horario -", est, "-", zona),
+        x = "Hora del día",
+        y = "Concentración media (µg/m³)"
+      ) +
+      theme_minimal() +
+      scale_x_continuous(breaks = 0:23) +
+      theme(legend.position = "bottom")
+
+    print(g)
+
+    ggsave(
+      filename = paste0("graficas_estacionales/", gsub(" ", "_", zona), "_", est, ".png"),
+      plot = g, width = 10, height = 6
+    )
+  }
+}
+
+
+
+```
+
+
+
+```
+
+
+
+
+
+
