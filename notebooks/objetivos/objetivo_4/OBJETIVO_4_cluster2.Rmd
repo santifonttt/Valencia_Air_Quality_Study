@@ -99,11 +99,10 @@ You can also embed plots, for example:
 
 ```{r , echo=FALSE}
 
-ruta_archivo <- "data_final_Objetivo_4.csv"
+ruta_archivo <- "estudio_calidad_aire_valencia/data/cleaned/inmuebles/data_final_Objetivo_4.csv"
 data <- read.csv(ruta_archivo, stringsAsFactors = FALSE)
-
-
 head(data)
+
 
 ```
 
@@ -666,7 +665,7 @@ library(ggplot2)
 library(dplyr)
 
 # Cargar el GeoJSON del mapa
-codigos_postales_mapa <- st_read("mapa_valencia_ccpp.geojson")
+codigos_postales_mapa <- st_read("estudio_calidad_aire_valencia/data/cleaned/geospacial/mapa_valencia_ccpp.geojson")
 
 # Vista previa rápida del mapa
 ggplot(codigos_postales_mapa) 
@@ -1815,7 +1814,7 @@ data_parcelas <- data_parcelas %>%
 # app.R
 
 # Sensores (con columnas: Estación, Latitud, Longitud)
-sensores <- read.csv("estaciones_valencia.csv") %>%
+sensores <- read.csv("estudio_calidad_aire_valencia/data/cleaned/geospacial/estaciones_valencia.csv") %>%
   rename(lat = Latitud, lon = Longitud, nombre = Estación)
 
 
@@ -1830,9 +1829,6 @@ library(ggplot2)
 # CARGA Y PREPARACIÓN DE DATOS
 # ============================
 
-# Leer datos
-sensores <- read.csv("estaciones_valencia.csv") %>%
-  rename(lat = Latitud, lon = Longitud, nombre = Estación)
 
 sensores_sf <- st_as_sf(sensores, coords = c("lon", "lat"), crs = 4326)
 sensores_utm <- st_transform(sensores_sf, 3857)
@@ -2049,7 +2045,7 @@ library(ggplot2)
 library(RColorBrewer)
 
 # Cargar dataset de calidad del aire
-contaminantes_df <- read.csv("Calidad_Aire_limpio.csv")
+contaminantes_df <- read.csv("estudio_calidad_aire_valencia/data/cleaned/calidad_aire/Calidad_Aire_limpio.csv")
 contaminantes_df$FechaHora <- as.POSIXct(contaminantes_df$FechaHora, format="%Y-%m-%d %H:%M:%S")
 
 # UI
